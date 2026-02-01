@@ -1,0 +1,22 @@
+network:
+  listen_grpc: ":50051"
+  listen_http: ":8080"
+  listen_ws: ":8081"
+  token_secret: "dev-secret-token"
+  tls:
+    cert_file: "certs/dev-cert.pem"
+    key_file: "certs/dev-key.pem"
+database:
+  dsn: "memory"
+limits:
+  max_open_orders: 5000
+  min_tick_size: 0.01
+instruments:
+  - symbol: "BTC-USD"
+    base: "BTC"
+    quote: "USD"
+  - symbol: "ETH-USD"
+    base: "ETH"
+    quote: "USD"
+storage:
+  wal_path: "data/exchange.wal"

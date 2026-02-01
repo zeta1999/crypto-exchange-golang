@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Crypto Exchange Console</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    pre { background: #111; color: #0f0; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Crypto Exchange Console</h1>
+  <p>This lightweight GUI submits HTTP orders and streams WebSocket snapshots.</p>
+  <pre>
+fetch('/orders', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer dev-secret-token'
+  },
+  body: JSON.stringify({
+    instrument: 'BTC-USD',
+    price: 42000,
+    volume: 0.5,
+    side: 'buy',
+    client_id: 'demo-1'
+  })
+});
+
+const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+const ws = new WebSocket(`${scheme}://localhost:8081/ws`);
+ws.onopen = () => ws.send(JSON.stringify({
+  command: 'snapshot',
+  instrument: 'BTC-USD',
+  token: 'dev-secret-token'
+}));
+ws.onmessage = (event) => console.log(JSON.parse(event.data));
+  </pre>
+</body>
+</html>

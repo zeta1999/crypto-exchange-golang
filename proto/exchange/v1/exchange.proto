@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package exchange.v1;
+
+option go_package = "github.com/zeta1999/crypto-exchange-golang/grpc/exchangev1";
+
+message SubmitOrderRequest {
+  string instrument = 1;
+  double price = 2;
+  double volume = 3;
+  string side = 4;
+  bool market = 5;
+  string client_id = 6;
+  string token = 7;
+}
+
+message Trade {
+  string buy_order_id = 1;
+  string sell_order_id = 2;
+  string instrument = 3;
+  double price = 4;
+  double volume = 5;
+  int64 executed_at_unix = 6;
+}
+
+message Level {
+  double price = 1;
+  double volume = 2;
+}
+
+message Snapshot {
+  string instrument = 1;
+  repeated Level bids = 2;
+  repeated Level asks = 3;
+  double best_bid = 4;
+  double best_ask = 5;
+  Trade last_trade = 6;
+}
+
+message SubmitOrderResponse {
+  repeated Trade trades = 1;
+  Snapshot snapshot = 2;
+}
+
+message GetSnapshotRequest {
+  string instrument = 1;
+  string token = 2;
+}
+
+message GetSnapshotResponse {
+  Snapshot snapshot = 1;
+}
+
+service ExchangeService {
+  rpc SubmitOrder(SubmitOrderRequest) returns (SubmitOrderResponse);
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+}
