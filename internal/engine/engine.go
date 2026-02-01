@@ -57,6 +57,12 @@ func (e *Engine) Snapshot(symbol string) (*orderbook.Snapshot, error) {
 	return e.book.Snapshot(symbol)
 }
 
+// CancelOrder removes a resting order and records the intent.
+func (e *Engine) CancelOrder(ctx context.Context, instrument, orderID string) (*orderbook.Order, error) {
+	_ = e.recorder.Append("order.cancel", map[string]string{"id": orderID, "instrument": instrument})
+	return e.book.CancelOrder(instrument, orderID)
+}
+
 func snapshotOrder(ord *orderbook.Order) map[string]interface{} {
 	if ord == nil {
 		return nil

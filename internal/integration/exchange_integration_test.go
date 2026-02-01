@@ -47,6 +47,34 @@ func TestMatchingFlowIntegration(t *testing.T) {
 	}
 }
 
+func TestCancelOrderRemovesLiquidity(t *testing.T) {
+	walFile := t.TempDir() + "/cancel.wal"
+	writer, err := wal.New(walFile)
+	if err != nil {
+		t.Fatalf("wal new: %v", err)
+	}
+	defer writer.Close()
+
+	book := orderbook.New([]string{"BTC-USD"})
+	validator := margin.NewValidator(book, margin.WithNotionalLimit(10_000_000))
+	eng := engine.New(book, validator, writer)
+	ctx := context.Background()
+
+	if _, _, err := eng.PlaceLimit(ctx, &orderbook.Order{ID: "cancel-me", Instrument: "BTC-USD", Price: 41_000, Volume: 1, Side: orderbook.SideBuy}); err != nil {
+		t.Fatalf("place order: %v", err)
+	}
+	if _, err := eng.CancelOrder(ctx, "BTC-USD", "cancel-me"); err != nil {
+		t.Fatalf("cancel order: %v", err)
+	}
+	snap, err := eng.Snapshot("BTC-USD")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(snap.Bids) != 0 {
+		t.Fatalf("expected empty bids got %v", snap.Bids)
+	}
+}
+
 func TestHTTPAuthIntegration(t *testing.T) {
 	engineStub := &mockEngine{}
 	tokenValidator := auth.NewTokenValidator("secret")

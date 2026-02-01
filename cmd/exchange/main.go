@@ -43,9 +43,15 @@ func main() {
 	defer walWriter.Close()
 
 	book := orderbook.New(instruments)
+	events := make(chan grpcserver.Event, 1024)
 	book.RegisterHook(func(evt string, data interface{}) {
 		if err := walWriter.Append("orderbook."+evt, data); err != nil {
 			log.Printf("wal hook error: %v", err)
+		}
+		select {
+		case events <- grpcserver.Event{Name: evt, Data: data}:
+		default:
+			log.Printf("stream event dropped: %s", evt)
 		}
 	})
 	marginValidator := margin.NewValidator(book, margin.WithNotionalLimit(1_000_000))
@@ -55,7 +61,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	grpcSrv := grpcserver.New(eng, tokenValidator)
+	grpcSrv := grpcserver.New(eng, tokenValidator, events)
 	wsHandler := wsadapter.NewHandler(eng, tokenValidator)
 	uiFS := http.FS(os.DirFS("http/ui"))
 	httpSrv := httpserver.New(eng, tokenValidator, wsHandler, uiFS)

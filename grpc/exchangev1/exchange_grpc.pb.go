@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	ExchangeService_SubmitOrder_FullMethodName = "/exchange.v1.ExchangeService/SubmitOrder"
-	ExchangeService_GetSnapshot_FullMethodName = "/exchange.v1.ExchangeService/GetSnapshot"
+	ExchangeService_SubmitOrder_FullMethodName  = "/exchange.v1.ExchangeService/SubmitOrder"
+	ExchangeService_GetSnapshot_FullMethodName  = "/exchange.v1.ExchangeService/GetSnapshot"
+	ExchangeService_StreamOrders_FullMethodName = "/exchange.v1.ExchangeService/StreamOrders"
 )
 
 // ExchangeServiceClient is the client API for ExchangeService service.
@@ -29,6 +30,7 @@ const (
 type ExchangeServiceClient interface {
 	SubmitOrder(ctx context.Context, in *SubmitOrderRequest, opts ...grpc.CallOption) (*SubmitOrderResponse, error)
 	GetSnapshot(ctx context.Context, in *GetSnapshotRequest, opts ...grpc.CallOption) (*GetSnapshotResponse, error)
+	StreamOrders(ctx context.Context, opts ...grpc.CallOption) (ExchangeService_StreamOrdersClient, error)
 }
 
 type exchangeServiceClient struct {
@@ -59,12 +61,45 @@ func (c *exchangeServiceClient) GetSnapshot(ctx context.Context, in *GetSnapshot
 	return out, nil
 }
 
+func (c *exchangeServiceClient) StreamOrders(ctx context.Context, opts ...grpc.CallOption) (ExchangeService_StreamOrdersClient, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ExchangeService_ServiceDesc.Streams[0], ExchangeService_StreamOrders_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &exchangeServiceStreamOrdersClient{ClientStream: stream}
+	return x, nil
+}
+
+type ExchangeService_StreamOrdersClient interface {
+	Send(*CommandEnvelope) error
+	Recv() (*StreamUpdate, error)
+	grpc.ClientStream
+}
+
+type exchangeServiceStreamOrdersClient struct {
+	grpc.ClientStream
+}
+
+func (x *exchangeServiceStreamOrdersClient) Send(m *CommandEnvelope) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *exchangeServiceStreamOrdersClient) Recv() (*StreamUpdate, error) {
+	m := new(StreamUpdate)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // ExchangeServiceServer is the server API for ExchangeService service.
 // All implementations must embed UnimplementedExchangeServiceServer
 // for forward compatibility
 type ExchangeServiceServer interface {
 	SubmitOrder(context.Context, *SubmitOrderRequest) (*SubmitOrderResponse, error)
 	GetSnapshot(context.Context, *GetSnapshotRequest) (*GetSnapshotResponse, error)
+	StreamOrders(ExchangeService_StreamOrdersServer) error
 	mustEmbedUnimplementedExchangeServiceServer()
 }
 
@@ -77,6 +112,9 @@ func (UnimplementedExchangeServiceServer) SubmitOrder(context.Context, *SubmitOr
 }
 func (UnimplementedExchangeServiceServer) GetSnapshot(context.Context, *GetSnapshotRequest) (*GetSnapshotResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSnapshot not implemented")
+}
+func (UnimplementedExchangeServiceServer) StreamOrders(ExchangeService_StreamOrdersServer) error {
+	return status.Errorf(codes.Unimplemented, "method StreamOrders not implemented")
 }
 func (UnimplementedExchangeServiceServer) mustEmbedUnimplementedExchangeServiceServer() {}
 
@@ -127,6 +165,32 @@ func _ExchangeService_GetSnapshot_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExchangeService_StreamOrders_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ExchangeServiceServer).StreamOrders(&exchangeServiceStreamOrdersServer{ServerStream: stream})
+}
+
+type ExchangeService_StreamOrdersServer interface {
+	Send(*StreamUpdate) error
+	Recv() (*CommandEnvelope, error)
+	grpc.ServerStream
+}
+
+type exchangeServiceStreamOrdersServer struct {
+	grpc.ServerStream
+}
+
+func (x *exchangeServiceStreamOrdersServer) Send(m *StreamUpdate) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *exchangeServiceStreamOrdersServer) Recv() (*CommandEnvelope, error) {
+	m := new(CommandEnvelope)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // ExchangeService_ServiceDesc is the grpc.ServiceDesc for ExchangeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -143,6 +207,13 @@ var ExchangeService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ExchangeService_GetSnapshot_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "StreamOrders",
+			Handler:       _ExchangeService_StreamOrders_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "proto/exchange/v1/exchange.proto",
 }

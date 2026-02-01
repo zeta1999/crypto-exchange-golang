@@ -54,6 +54,7 @@ type Level struct {
 
 var (
 	ErrUnknownInstrument = errors.New("unknown instrument")
+	ErrOrderNotFound     = errors.New("order not found")
 )
 
 // Hook is a callback triggered after key operations (fills, cancels, triggers).
@@ -131,6 +132,25 @@ func (b *OrderBook) AddLimitOrder(ord *Order) ([]*Trade, error) {
 func (b *OrderBook) ExecuteMarketOrder(ord *Order) ([]*Trade, error) {
 	ord.IsMarket = true
 	return b.AddLimitOrder(ord)
+}
+
+// CancelOrder removes a resting order by identifier if present.
+func (b *OrderBook) CancelOrder(symbol, orderID string) (*Order, error) {
+	book, ok := b.instruments[symbol]
+	if !ok {
+		return nil, ErrUnknownInstrument
+	}
+	book.mu.Lock()
+	defer book.mu.Unlock()
+	if removed, ok := removeOrder(&book.bids.orders, orderID); ok {
+		b.fire("cancel", removed)
+		return removed, nil
+	}
+	if removed, ok := removeOrder(&book.asks.orders, orderID); ok {
+		b.fire("cancel", removed)
+		return removed, nil
+	}
+	return nil, ErrOrderNotFound
 }
 
 // Snapshot returns a copy of the current book state for the instrument.
@@ -220,6 +240,19 @@ func (b *instrumentBook) matchLocked(incoming *Order) []*Trade {
 	}
 	*queue = (*queue)[i:]
 	return trades
+}
+
+func removeOrder(orders *[]*Order, orderID string) (*Order, bool) {
+	queue := *orders
+	for i, ord := range queue {
+		if ord.ID == orderID {
+			removed := ord
+			queue = append(queue[:i], queue[i+1:]...)
+			*orders = queue
+			return removed, true
+		}
+	}
+	return nil, false
 }
 
 func aggregateLevels(orders []*Order, desc bool) []Level {

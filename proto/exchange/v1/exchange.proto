@@ -4,14 +4,32 @@ package exchange.v1;
 
 option go_package = "github.com/zeta1999/crypto-exchange-golang/grpc/exchangev1";
 
-message SubmitOrderRequest {
+message OrderCommand {
   string instrument = 1;
   double price = 2;
   double volume = 3;
   string side = 4;
   bool market = 5;
   string client_id = 6;
-  string token = 7;
+}
+
+message SubmitOrderRequest {
+  OrderCommand order = 1;
+  string token = 2;
+}
+
+message CommandEnvelope {
+  oneof payload {
+    OrderCommand order = 1;
+    CancelCommand cancel = 2;
+    string request_snapshot = 3;
+  }
+  string token = 10;
+}
+
+message CancelCommand {
+  string instrument = 1;
+  string order_id = 2;
 }
 
 message Trade {
@@ -54,4 +72,21 @@ message GetSnapshotResponse {
 service ExchangeService {
   rpc SubmitOrder(SubmitOrderRequest) returns (SubmitOrderResponse);
   rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+  rpc StreamOrders(stream CommandEnvelope) returns (stream StreamUpdate);
+}
+
+message StreamUpdate {
+  oneof payload {
+    Trade trade = 1;
+    Snapshot snapshot = 2;
+    string ack = 3;
+    string error = 4;
+    OrderEvent order_event = 5;
+  }
+}
+
+message OrderEvent {
+  string type = 1;
+  string order_id = 2;
+  string instrument = 3;
 }
