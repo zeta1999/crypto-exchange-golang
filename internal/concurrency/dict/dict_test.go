@@ -17,6 +17,7 @@ type factory struct {
 func implementations() []factory {
 	return []factory{
 		{name: "lockfree-tree", fn: func() Dictionary { return NewLockFreeTreeMap() }},
+		{name: "lockfree-skiplist", fn: func() Dictionary { return NewLockFreeSkipListMap() }},
 		{name: "skiplist", fn: func() Dictionary { return NewSkipListMap() }},
 		{name: "sharded-map", fn: func() Dictionary { return NewShardedMap(32) }},
 	}
@@ -119,7 +120,7 @@ func TestDictionaryConcurrentAccess(t *testing.T) {
 
 func expectsSortedRange(name string) bool {
 	switch name {
-	case "lockfree-tree", "skiplist":
+	case "lockfree-tree", "skiplist", "lockfree-skiplist":
 		return true
 	default:
 		return false

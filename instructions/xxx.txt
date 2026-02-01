@@ -5,3 +5,7 @@
 - kubernetes
 ...
 
+- lockless & jepsen
+- ... ? waifree
+- TLA+ ?
+
