@@ -20,3 +20,15 @@ instruments:
     quote: "USD"
 storage:
   wal_path: "data/exchange.wal"
+# Live-venue emulation: mirror a real exchange's order book into the engine as
+# synthetic liquidity, converging back to the reference after user trades.
+# Set enabled: false to run as a plain matching engine (offline).
+emulator:
+  enabled: true
+  venue: "coinbase"            # coinbase | binance
+  instruments: ["BTC-USD", "ETH-USD"]   # must match engine symbols above
+  reference:
+    depth_levels: 20           # price levels per side to mirror (0 = full book)
+    refresh_ms: 250            # reconcile / convergence cadence
+  rtr:
+    tau_ms: 3000               # return-to-reference horizon; 0 = instant mirror

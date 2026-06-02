@@ -54,19 +54,42 @@ func main() {
 			log.Printf("stream event dropped: %s", evt)
 		}
 	})
-	marginValidator := margin.NewValidator(book, margin.WithNotionalLimit(1_000_000))
+	// Synthetic emulator liquidity bypasses user margin checks.
+	marginValidator := syntheticExemptMargin{inner: margin.NewValidator(book, margin.WithNotionalLimit(1_000_000))}
 	eng := engine.New(book, marginValidator, walWriter)
 	tokenValidator := auth.NewTokenValidator(cfg.Network.TokenSecret)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	group, ctx := errgroup.WithContext(ctx)
+
+	// Optionally mirror a live venue into the engine (feed → reference →
+	// seeded synthetic liquidity with return-to-reference).
+	if cfg.Emulator.Enabled {
+		seeders, err := startEmulator(ctx, group, cfg.Emulator, eng, book)
+		if err != nil {
+			log.Fatalf("start emulator: %v", err)
+		}
+		book.RegisterHook(func(evt string, data interface{}) {
+			if evt != "trade" {
+				return
+			}
+			t, ok := data.(*orderbook.Trade)
+			if !ok {
+				return
+			}
+			if s := seeders[t.Instrument]; s != nil {
+				s.OnTrade(t) // account user fills against synthetic liquidity
+			}
+		})
+	}
+
 	grpcSrv := grpcserver.New(eng, tokenValidator, events)
 	wsHandler := wsadapter.NewHandler(eng, tokenValidator)
 	uiFS := http.FS(os.DirFS("http/ui"))
 	httpSrv := httpserver.New(eng, tokenValidator, wsHandler, uiFS)
 
-	group, ctx := errgroup.WithContext(ctx)
 	group.Go(func() error {
 		log.Printf("gRPC listening on %s", cfg.Network.ListenGRPC)
 		if err := grpcserver.ListenAndServe(ctx, cfg.Network.ListenGRPC, grpcSrv); err != nil {

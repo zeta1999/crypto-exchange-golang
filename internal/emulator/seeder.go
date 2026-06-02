@@ -165,9 +165,11 @@ func (s *Seeder) Reconcile(ctx context.Context) (Stats, error) {
 //
 //	target = current + alpha*(reference - current)
 //
-// (stale levels not in the reference decay toward zero), so alpha=1 snaps to
-// the reference and 0<alpha<1 approaches it geometrically over repeated calls
-// — the return-to-reference behavior. Pending fills are folded in first, so a
+// for levels still in the reference; levels that have left the reference are
+// drained promptly (removed this pass, not decayed) to avoid a dust tail as
+// the book moves. So alpha=1 snaps to the reference and 0<alpha<1 approaches
+// it geometrically over repeated calls — the return-to-reference behavior.
+// Pending fills are folded in first, so a
 // user-eaten level is topped back up. Levels already at their target are left
 // untouched (no churn, preserved queue priority). Cancellations precede
 // placements; combined with the uncrossed-reference guard, a placement can
@@ -223,7 +225,12 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 		if _, ok := refVol[k]; ok {
 			continue // already planned above
 		}
-		plans[k] = plan{key: k, side: cur.side, price: cur.price, target: cur.volume * (1 - alpha), existed: true, curID: cur.id}
+		// Stale level (no longer in the reference, e.g. price moved past it):
+		// drain it promptly — target 0 — rather than decaying geometrically,
+		// which would leave a growing tail of dust orders as the book moves
+		// ("drain stale synthetics first", PLAN §4). Only the volumes of
+		// levels still in the reference converge gradually.
+		plans[k] = plan{key: k, side: cur.side, price: cur.price, target: 0, existed: true, curID: cur.id}
 	}
 
 	// Pass 1: cancel everything that must change (removed, drained, or

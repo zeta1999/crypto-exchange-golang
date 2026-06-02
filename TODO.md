@@ -49,14 +49,15 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [ ] (still open) seeder lock held across engine calls — acceptable now; revisit if Clear/shutdown latency matters at scale
 
 ## Phase D — Fixed-point decimals (foundational; prices & quantities) — see PLAN.md §9
-- [ ] `pkg/decimal`: `Decimal` (base-10, 18 frac digits, signed 128-bit scaled storage `{hi,lo}`)
-- [ ] construction: `FromRaw`/`Raw`, `FromInt`, `FromFloat` (lossy), `Parse`/`MustParse`
-- [ ] format: `Float64`, `String`/`StringPrec` (truncate), JSON/Text marshaling as decimal string
-- [ ] arithmetic: `Add`/`Sub` (math/bits carry), `Mul`/`Div` (256-bit intermediate; div-by-zero panics; result-overflow panics), `Neg`/`Abs`/`Sign`/`IsZero`
-- [ ] compare: `Cmp`/`Eq`/`Lt`/`Lte`/`Gt`/`Gte`, free `Min`/`Max`/`Abs`; comparable map-key
+- [x] `pkg/decimal`: `Decimal` (base-10, 18 frac digits, signed 128-bit scaled storage `{hi,lo}`)
+- [x] construction: `FromRaw`/`Raw`, `FromInt`, `FromFloat` (lossy, non-finite panics), `Parse`/`MustParse`
+- [x] format: `Float64`, `String`/`StringPrec` (truncate), robust JSON/Text marshaling as decimal string
+- [x] arithmetic: `Add`/`Sub` (math/bits carry + overflow detect), `Mul`/`Div` (big.Int interim; div-by-zero/overflow panic), `Neg`/`Abs`/`Sign`/`IsZero`
+- [x] compare: `Cmp`/`Eq`/`Lt`/`Lte`/`Gt`/`Gte`, free `Min`/`Max`/`Abs`; comparable map-key (proven canonical)
+- [x] tests: Parse↔String round-trip; arithmetic vs math/big.Rat oracle (5k); overflow/edge; JSON robustness
+- [x] brutal review + fixes (JSON quote-strip, FromFloat non-finite, perf TODOs)
+- [ ] (perf, deferred) replace big.Int Mul/Div with allocation-free limb math + benchmark (PLAN §9.7)
 - [ ] (optional) float64-backed backend behind same API for A/B + fast mode
-- [ ] first cut via math/big.Int intermediate, then allocation-free limb math + benchmark
-- [ ] tests: Parse↔String round-trip; arithmetic vs math/big.Rat oracle; overflow/edge; JSON/WAL
 - [ ] migration (PLAN.md §9.8): matching core → feed edge → reference → emulator → WAL/API
 
 ## Phase 5 — Trade replay sync

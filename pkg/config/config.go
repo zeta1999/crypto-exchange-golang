@@ -46,6 +46,29 @@ type Config struct {
 	Limits      Limits       `yaml:"limits"`
 	Instruments []Instrument `yaml:"instruments"`
 	Storage     Storage      `yaml:"storage"`
+	Emulator    Emulator     `yaml:"emulator"`
+}
+
+// Emulator configures live-venue mirroring (feed → reference book → seeded
+// synthetic liquidity in the engine, with return-to-reference). When
+// disabled, the exchange runs as a plain matching engine. See PLAN.md.
+type Emulator struct {
+	Enabled     bool              `yaml:"enabled"`
+	Venue       string            `yaml:"venue"` // "coinbase" | "binance"
+	Instruments []string          `yaml:"instruments"`
+	Reference   EmulatorReference `yaml:"reference"`
+	RTR         EmulatorRTR       `yaml:"rtr"`
+}
+
+// EmulatorReference controls how the reference book is mirrored into the engine.
+type EmulatorReference struct {
+	DepthLevels int `yaml:"depth_levels"` // levels per side to mirror; 0 = all
+	RefreshMs   int `yaml:"refresh_ms"`   // reconcile/convergence cadence
+}
+
+// EmulatorRTR controls return-to-reference convergence.
+type EmulatorRTR struct {
+	TauMs int `yaml:"tau_ms"` // convergence horizon; 0 = instant mirror (snap)
 }
 
 type Storage struct {

@@ -179,40 +179,43 @@ func TestFillAccountingMatchesEngine(t *testing.T) {
 	}
 }
 
-// TestConvergeDrainsStaleProgressively: a level that leaves the reference is
-// drained toward zero over successive passes, not removed instantly.
-func TestConvergeDrainsStaleProgressively(t *testing.T) {
+// TestStaleLevelRemovedPromptly: a level that leaves the reference (price
+// moved past it) is drained in a single pass even at small alpha — not decayed
+// gradually — so the book doesn't accumulate a dust tail as it moves.
+func TestStaleLevelRemovedPromptly(t *testing.T) {
 	t0 := time.Unix(1700000000, 0).UTC()
 	eng := newEngine("BTC-USD")
 	ref := reference.NewBook("BTC-USD", "coinbase")
-	ref.Apply(bookSnap(1, t0, true, []feed.LOBLevel{lvl(100, 4)}, []feed.LOBLevel{lvl(101, 1)}))
+	ref.Apply(bookSnap(1, t0, true, []feed.LOBLevel{lvl(100, 4), lvl(99, 2)}, []feed.LOBLevel{lvl(101, 1)}))
 	s := NewSeeder(eng, ref, Config{Instrument: "BTC-USD"})
 	if _, err := s.Converge(context.Background(), 1.0); err != nil {
 		t.Fatal(err)
 	}
 
-	// Reference drops the 100 bid entirely.
+	// Reference drops the 100 bid (it left the book).
 	ref.Apply(bookSnap(2, t0.Add(time.Second), false, []feed.LOBLevel{lvl(100, 0)}, nil))
-
-	prev := 4.0
-	for i := 0; i < 3; i++ {
-		if _, err := s.Converge(context.Background(), 0.5); err != nil {
-			t.Fatal(err)
-		}
-		snap, _ := eng.Snapshot("BTC-USD")
-		var cur float64
-		for _, l := range snap.Bids {
-			if l.Price == 100 {
-				cur = l.Volume
-			}
-		}
-		if cur >= prev {
-			t.Errorf("step %d: stale level did not shrink (%v >= %v)", i, cur, prev)
-		}
-		prev = cur
+	st, err := s.Converge(context.Background(), 0.1) // tiny alpha, but stale removal is prompt
+	if err != nil {
+		t.Fatal(err)
 	}
-	if prev <= 0 || prev >= 1 {
-		t.Errorf("stale level should be draining but present: %v", prev)
+	if st.Cancelled != 1 {
+		t.Errorf("stale level should be cancelled in one pass: %+v", st)
+	}
+	snap, _ := eng.Snapshot("BTC-USD")
+	for _, l := range snap.Bids {
+		if l.Price == 100 {
+			t.Errorf("stale level 100 still present: %+v", l)
+		}
+	}
+	// The still-present 99 bid remains.
+	found99 := false
+	for _, l := range snap.Bids {
+		if l.Price == 99 {
+			found99 = true
+		}
+	}
+	if !found99 {
+		t.Error("present level 99 should remain")
 	}
 }
 

@@ -30,6 +30,13 @@ func (s *Set) Get(instrument string) (*Book, bool) {
 	return b, ok
 }
 
+// Ensure returns the book for instrument, creating it (with exchange) if it
+// does not yet exist. Useful for wiring a consumer (e.g. the seeder) to a book
+// before any feed event has arrived.
+func (s *Set) Ensure(instrument, exchange string) *Book {
+	return s.book(instrument, exchange)
+}
+
 // book returns the book for instrument, creating it (with exchange) if absent.
 func (s *Set) book(instrument, exchange string) *Book {
 	s.mu.RLock()
