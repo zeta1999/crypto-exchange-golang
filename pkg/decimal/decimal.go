@@ -263,21 +263,28 @@ func (d Decimal) Sub(e Decimal) Decimal {
 func (d Decimal) Neg() Decimal { return Zero.Sub(d) }
 
 // Mul returns d * e (= d.raw * e.raw / scale, truncated toward zero). Panics
-// on overflow.
-//
-// TODO(perf): big.Int intermediate allocates; replace with allocation-free
-// 256-bit limb math (math/bits) before this is used in the matching hot path
-// — see PLAN.md §9.7. Benchmark first.
+// on overflow. Allocation-free: it does the 128×128→256 product and the ÷scale
+// in 64-bit limbs via math/bits (validated against a big.Rat oracle in tests).
 func (d Decimal) Mul(e Decimal) Decimal {
-	p := new(big.Int).Mul(d.toBig(), e.toBig())
-	p.Quo(p, scaleBig) // truncate toward zero
-	return fromBig(p)
+	amhi, amlo, aneg := absMag(d)
+	bmhi, bmlo, bneg := absMag(e)
+	// 128×128 → 256-bit product of the magnitudes (p0 least significant).
+	p0, p1, p2, p3 := mul128to256(amhi, amlo, bmhi, bmlo)
+	// Divide the 256-bit magnitude by scale (a uint64); truncates toward zero.
+	q0, q1, q2, q3 := div256by64(p0, p1, p2, p3, scaleU)
+	if q2 != 0 || q3 != 0 { // quotient exceeds 128 bits
+		panic("decimal: value overflows 128-bit range")
+	}
+	return fromMag(q1, q0, aneg != bneg)
 }
 
 // Div returns d / e (= d.raw * scale / e.raw, truncated toward zero). Panics
 // on division by zero or overflow.
 //
-// TODO(perf): see Mul — replace the big.Int intermediate with limb math.
+// Unlike Mul (now allocation-free limb math), Div keeps the big.Int
+// intermediate: it's a rare path (mostly mid/average prices, not the matching
+// hot loop), and a correct allocation-free 256÷128 division (Knuth D) isn't
+// worth the complexity here yet. TODO(perf): revisit if Div shows up hot.
 func (d Decimal) Div(e Decimal) Decimal {
 	if e.IsZero() {
 		panic("decimal: division by zero")
@@ -354,6 +361,78 @@ func Max(a, b Decimal) Decimal {
 		return a
 	}
 	return b
+}
+
+// --- allocation-free 128/256-bit limb math (used by Mul) ---
+
+const signBit = uint64(1) << 63
+
+// absMag returns the unsigned 128-bit magnitude of d and whether it was negative.
+func absMag(d Decimal) (mhi, mlo uint64, neg bool) {
+	if d.hi < 0 {
+		// Negate the two's-complement 128-bit value to get the magnitude.
+		lo, borrow := bits.Sub64(0, d.lo, 0)
+		hi, _ := bits.Sub64(0, uint64(d.hi), borrow)
+		return hi, lo, true
+	}
+	return uint64(d.hi), d.lo, false
+}
+
+// mul128to256 returns the 256-bit product of two 128-bit magnitudes as four
+// 64-bit limbs, p0 least significant.
+func mul128to256(ahi, alo, bhi, blo uint64) (p0, p1, p2, p3 uint64) {
+	llHi, llLo := bits.Mul64(alo, blo)
+	lhHi, lhLo := bits.Mul64(alo, bhi)
+	hlHi, hlLo := bits.Mul64(ahi, blo)
+	hhHi, hhLo := bits.Mul64(ahi, bhi)
+
+	p0 = llLo
+	// p1 = llHi + lhLo + hlLo
+	var c1, c2 uint64
+	p1, c1 = bits.Add64(llHi, lhLo, 0)
+	p1, c2 = bits.Add64(p1, hlLo, 0)
+	carry1 := c1 + c2
+	// p2 = lhHi + hlHi + hhLo + carry1
+	var c3, c4, c5 uint64
+	p2, c3 = bits.Add64(lhHi, hlHi, 0)
+	p2, c4 = bits.Add64(p2, hhLo, 0)
+	p2, c5 = bits.Add64(p2, carry1, 0)
+	carry2 := c3 + c4 + c5
+	// p3 = hhHi + carry2 (cannot overflow: max product fits 256 bits)
+	p3 = hhHi + carry2
+	return
+}
+
+// div256by64 divides a 256-bit value (limbs n0..n3, n0 least significant) by a
+// uint64 divisor, returning the 256-bit quotient (q0 least significant),
+// truncated toward zero. d must be > 0. Each step's remainder stays < d, so the
+// bits.Div64 precondition (hi < d) always holds.
+func div256by64(n0, n1, n2, n3, d uint64) (q0, q1, q2, q3 uint64) {
+	var rem uint64
+	q3, rem = bits.Div64(0, n3, d)
+	q2, rem = bits.Div64(rem, n2, d)
+	q1, rem = bits.Div64(rem, n1, d)
+	q0, _ = bits.Div64(rem, n0, d)
+	return
+}
+
+// fromMag builds a Decimal from an unsigned 128-bit magnitude and sign,
+// panicking if it exceeds the signed 128-bit range.
+func fromMag(mhi, mlo uint64, neg bool) Decimal {
+	if neg {
+		// Valid iff magnitude ≤ 2^127 (so the value ≥ -2^127).
+		if mhi > signBit || (mhi == signBit && mlo > 0) {
+			panic("decimal: value overflows 128-bit range")
+		}
+		lo, borrow := bits.Sub64(0, mlo, 0)
+		hi, _ := bits.Sub64(0, mhi, borrow)
+		return Decimal{hi: int64(hi), lo: lo}
+	}
+	// Positive: valid iff the top bit is clear (magnitude < 2^127).
+	if mhi >= signBit {
+		panic("decimal: value overflows 128-bit range")
+	}
+	return Decimal{hi: int64(mhi), lo: mlo}
 }
 
 // --- 128-bit <-> big.Int bridging ---

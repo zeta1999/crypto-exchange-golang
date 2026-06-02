@@ -244,3 +244,18 @@ func TestFromIntFloat(t *testing.T) {
 		t.Errorf("Float64 = %v", got)
 	}
 }
+
+func TestMulIsAllocationFree(t *testing.T) {
+	a, b := MustParse("12345.678901234567"), MustParse("9.87654321")
+	if n := testing.AllocsPerRun(1000, func() { _ = a.Mul(b) }); n != 0 {
+		t.Errorf("Mul allocates %v times/op, want 0", n)
+	}
+}
+
+func BenchmarkMul(b *testing.B) {
+	x, y := MustParse("70123.45"), MustParse("0.00318")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = x.Mul(y)
+	}
+}
