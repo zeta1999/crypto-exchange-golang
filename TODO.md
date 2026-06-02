@@ -68,12 +68,13 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] brutal review + fixes (IOC primitive vs place-then-cancel, NaN/Inf panic guard, HOL decouple)
 - [ ] real-time vs accelerated (`speed`) clock — deferred to Phase 7 (trace replay drives the clock)
 
-## Phase 6 — Configurable toxicity [b]
-- [ ] `internal/toxicity/kyle.go`: signed-volume → Δprice regression (λ)
-- [ ] `internal/toxicity/vpin.go`: volume buckets, informed-trade proxy
-- [ ] adverse-selection injector on resting user limits
-- [ ] config knobs: `scale`, `kyle_weight`, `vpin_weight`, `window_trades`, `seed`
-- [ ] tests: high toxicity ⇒ more adverse fills; `scale:0` ⇒ pure RTR
+## Phase 6 — Configurable toxicity [b] — DONE
+- [x] `internal/toxicity/kyle.go`: signed-volume → Δprice regression (λ)
+- [x] `internal/toxicity/vpin.go`: volume buckets, informed-trade proxy (single-print capped)
+- [x] `internal/emulator/toxic.go`: adverse-selection injector (seeded; scale·Score prob; scale·Impact penetration bounded to 1 spread)
+- [x] config knobs (`scale`/`kyle_weight`/`vpin_weight`/`window_trades`/`bucket_volume`/`buckets`/`seed`) + wired into binary
+- [x] tests: high toxicity ⇒ picks off resting user order; `scale:0` ⇒ pure RTR; non-finite guard
+- [x] brutal review + fixes (bounded sweep, panic guard, weight/VPIN clamps)
 
 ## Phase 7 — Scenario & fault injection (OMS / strategy test bed)
 - [ ] Trace replay (full): feed whole emulator from a recorded trace, deterministic, `speed`
