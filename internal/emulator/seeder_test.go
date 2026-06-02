@@ -159,6 +159,71 @@ func TestDepthLevelsCap(t *testing.T) {
 	assertMirrors(t, eng, ref, 2)
 }
 
+func TestPriceShiftNeverSelfMatches(t *testing.T) {
+	// When the whole book shifts up between passes, surviving and newly
+	// placed synthetic orders are all current (uncrossed) reference levels,
+	// so no placement may cross another synthetic order. Assert Trades==0
+	// and the book mirrors after each step.
+	t0 := time.Unix(1700000000, 0).UTC()
+	eng := newEngine("BTC-USD")
+	ref := reference.NewBook("BTC-USD", "coinbase")
+	s := NewSeeder(eng, ref, Config{Instrument: "BTC-USD"})
+
+	steps := []struct{ bids, asks []feed.LOBLevel }{
+		{[]feed.LOBLevel{lvl(100, 2), lvl(99, 5)}, []feed.LOBLevel{lvl(101, 1), lvl(102, 3)}},
+		// Shift up; touch moves past old levels, some keys persist on each side.
+		{[]feed.LOBLevel{lvl(102, 2), lvl(101, 5)}, []feed.LOBLevel{lvl(103, 1), lvl(104, 3)}},
+		// Narrow the spread; new bid sits just under the surviving ask.
+		{[]feed.LOBLevel{lvl(102.5, 1), lvl(102, 2)}, []feed.LOBLevel{lvl(103, 1), lvl(104, 3)}},
+	}
+	for i, step := range steps {
+		ref.Apply(bookSnap(uint64(i+1), t0.Add(time.Duration(i)*time.Second), true, step.bids, step.asks))
+		st, err := s.Reconcile(context.Background())
+		if err != nil {
+			t.Fatalf("step %d reconcile: %v", i, err)
+		}
+		if st.Trades != 0 {
+			t.Fatalf("step %d produced %d synthetic self-trades", i, st.Trades)
+		}
+		assertMirrors(t, eng, ref, 0)
+	}
+}
+
+func TestReconcileToleratesExternallyRemovedOrder(t *testing.T) {
+	// Simulate a synthetic order being filled/cancelled out-of-band (as
+	// Phase 4/5 user flow will do): the engine no longer has it, but s.placed
+	// still does. Reconcile must not abort on ErrOrderNotFound.
+	t0 := time.Unix(1700000000, 0).UTC()
+	eng := newEngine("BTC-USD")
+	ref := reference.NewBook("BTC-USD", "coinbase")
+	ref.Apply(bookSnap(1, t0, true, []feed.LOBLevel{lvl(100, 2), lvl(99, 5)}, []feed.LOBLevel{lvl(101, 1)}))
+	s := NewSeeder(eng, ref, Config{Instrument: "BTC-USD"})
+	if _, err := s.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove the 99 bid behind the seeder's back.
+	if _, err := eng.CancelOrder(context.Background(), "BTC-USD", s.synthID(orderbook.SideBuy, 99)); err != nil {
+		t.Fatalf("out-of-band cancel: %v", err)
+	}
+
+	// Reference drops 99 entirely; reconcile will try to cancel the already-
+	// gone order. It must succeed, not abort.
+	ref.Apply(bookSnap(2, t0.Add(time.Second), false, []feed.LOBLevel{lvl(99, 0)}, nil))
+	if _, err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile aborted on not-found cancel: %v", err)
+	}
+	assertMirrors(t, eng, ref, 0)
+
+	// Clear must also tolerate an already-gone order.
+	if _, err := eng.CancelOrder(context.Background(), "BTC-USD", s.synthID(orderbook.SideBuy, 100)); err != nil {
+		t.Fatalf("out-of-band cancel: %v", err)
+	}
+	if err := s.Clear(context.Background()); err != nil {
+		t.Fatalf("clear aborted on not-found cancel: %v", err)
+	}
+}
+
 func TestClear(t *testing.T) {
 	t0 := time.Unix(1700000000, 0).UTC()
 	eng := newEngine("BTC-USD")

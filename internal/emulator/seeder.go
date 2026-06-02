@@ -10,6 +10,7 @@ package emulator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -46,6 +47,15 @@ type Config struct {
 }
 
 // Seeder reconciles one instrument's engine liquidity against a reference book.
+//
+// Scope note: the placed map is the seeder's record of the synthetic orders
+// it owns, and Reconcile assumes the seeder is their sole mutator. That holds
+// in Phase 3 (no user flow). When user trades begin filling synthetic orders
+// (Phase 4/5), a resting order's volume can shrink or disappear underneath
+// this map; Reconcile already tolerates a vanished order (cancelling a
+// not-found order is a no-op), but topping a partially-eaten level back to its
+// reference size is deferred to the Phase 4 return-to-reference controller,
+// which will own fill accounting.
 type Seeder struct {
 	matcher Matcher
 	ref     *reference.Book
@@ -127,7 +137,10 @@ func (s *Seeder) Reconcile(ctx context.Context) (Stats, error) {
 		if ok && want.volume == cur.volume {
 			continue // unchanged; leave the resting order in place
 		}
-		if _, err := s.matcher.CancelOrder(ctx, s.cfg.Instrument, cur.id); err != nil {
+		// A not-found order is already in the desired post-cancel state (it
+		// was filled or cancelled out from under us), so treat that as
+		// success and proceed; any other error is real.
+		if _, err := s.matcher.CancelOrder(ctx, s.cfg.Instrument, cur.id); err != nil && !errors.Is(err, orderbook.ErrOrderNotFound) {
 			return st, fmt.Errorf("cancel %s: %w", cur.id, err)
 		}
 		delete(s.placed, k)
@@ -185,7 +198,7 @@ func (s *Seeder) Clear(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, cur := range s.placed {
-		if _, err := s.matcher.CancelOrder(ctx, s.cfg.Instrument, cur.id); err != nil {
+		if _, err := s.matcher.CancelOrder(ctx, s.cfg.Instrument, cur.id); err != nil && !errors.Is(err, orderbook.ErrOrderNotFound) {
 			return fmt.Errorf("cancel %s: %w", cur.id, err)
 		}
 		delete(s.placed, k)
