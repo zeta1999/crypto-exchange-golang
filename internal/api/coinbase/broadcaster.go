@@ -27,20 +27,17 @@ const (
 //
 // Unlike the Binance edge (URL-stream based), Coinbase subscriptions are
 // message-driven: the client sends subscribe/unsubscribe frames after the
-// upgrade, so each conn carries a mutable per-channel product set guarded by
-// its own mutex. The book hooks read it under RLock; the read pump mutates it.
+// upgrade. All subscription state lives in the Broadcaster's maps (market by
+// channel→product→conns, plus a flat user set), guarded by Broadcaster.mu;
+// the read pump mutates it through the locked subscribe/unsubscribe API and
+// the book hooks/ticker read it under the same lock. User-channel delivery is
+// gated solely by membership in the broadcaster's user set (added only after
+// authWS passes).
 type wsConn struct {
 	ws       *websocket.Conn
 	out      chan []byte
 	closeOne sync.Once
 	closed   chan struct{}
-
-	// authed reports whether this conn supplied valid credentials in a user
-	// subscribe message; it gates user-channel delivery. Written by the read
-	// pump before the conn is registered to the user channel, read by the user
-	// hook — registration to the user set happens-after the flag is set, and
-	// the broadcaster mutex orders both, so no separate guard is needed.
-	authed bool
 
 	// seq is this connection's monotonic sequence_num counter (per-conn scope,
 	// matching how a real Advanced Trade socket numbers frames per connection).

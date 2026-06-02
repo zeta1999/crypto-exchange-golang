@@ -2,6 +2,7 @@ package coinbase
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -270,7 +271,8 @@ func (s *Server) handleUserSub(c *wsConn, msg *subscribeMsg, sub bool) {
 		c.trySendErr(s, chanUser, "user channel requires authentication")
 		return
 	}
-	c.authed = true
+	// Authentication gate is enforced here; membership in the broadcaster's
+	// user set is the source of truth for delivery.
 	s.broadcaster.subscribeUser(c)
 	s.sendAck(c, chanUser, nil)
 }
@@ -287,7 +289,7 @@ func (s *Server) authWS(msg *subscribeMsg) bool {
 		return true
 	}
 	for _, got := range []string{msg.APIKey, msg.JWT, msg.Token} {
-		if got != "" && got == want {
+		if got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
 			return true
 		}
 	}
