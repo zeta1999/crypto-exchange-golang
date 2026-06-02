@@ -79,7 +79,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 
 ## Phase 7 — Scenario & fault injection (OMS / strategy test bed)
 - [x] Trace replay (full): `venue: replay` feeds the whole emulator from a recorded trace, offline + deterministic (reuses Phase 1 replay.Source; integration-tested + live-verified). `speed` pacing reserved/deferred.
-- [x] `internal/emulator/latency.go`: artificial latency — feed→book (wired), order_ack/fill_report (TODO: apply at API edges, Phase 8/9), per-edge, jitter
+- [x] `internal/emulator/latency.go`: artificial latency — feed→book (wired), **order_ack wired at both API edges** (WithAckDelay; live-verified), per-edge, jitter. fill_report deferred (needs async WS delivery, can't sleep in the book hook)
 - [x] `internal/emulator/priceshift.go`: artificial price shift — `offset_bps` + `scale` per venue (wired into dispatcher; shifts both float Price and PriceDecimal)
 - [ ] cross-venue dislocation harness (two venues driven apart → closeable arbitrage)
 - [x] scenario scripting format (JSONL): timeline of injection events (`scenario.go`; runtime-mutable `Controls`; price_shift+latency actions; deterministic; reviewed)
