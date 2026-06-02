@@ -58,7 +58,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] brutal review + fixes (JSON quote-strip, FromFloat non-finite, perf TODOs)
 - [ ] (perf, deferred) replace big.Int Mul/Div with allocation-free limb math + benchmark (PLAN §9.7)
 - [ ] (optional) float64-backed backend behind same API for A/B + fast mode
-- [ ] migration (PLAN.md §9.8): matching core → feed edge → reference → emulator → WAL/API
+- [x] migration (PLAN.md §9.8): matching core (orderbook/engine/margin) → reference (parses feed decimal strings) → emulator → API edges convert at boundary; feed stays float64. CI green; live-verified (HTTP emits exact decimal strings). Follow-up: exact alpha=1 snap + 1e-9 convergence tolerance.
 
 ## Phase 5 — Trade replay sync
 - [ ] `internal/emulator/replay.go`: tape trade → marketable order vs engine book

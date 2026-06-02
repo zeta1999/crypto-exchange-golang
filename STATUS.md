@@ -3,11 +3,12 @@
 _Last updated: 2026-06-02_
 
 ## Current phase
-**Runnable product milestone** ✅ — `go run ./cmd/exchange` boots a live Coinbase-mirroring
-exchange (feed → reference → seeded synthetic liquidity + RTR), tradable via gRPC/HTTP/WS;
-verified live (book holds 20 levels/side, uncrossed, tracking the venue). Phases 1–4 + the
-`pkg/decimal` type are done & reviewed. **Next:** Phase 5 — Trade replay sync; then the
-float64→Decimal migration (PLAN §9.8) and Phases 6–11.
+**Runnable product + exact decimals** ✅ — `go run ./cmd/exchange` boots a live Coinbase-mirroring
+exchange (feed → reference → seeded synthetic liquidity + RTR), tradable via gRPC/HTTP/WS, with
+all prices/quantities now exact `decimal.Decimal` (matching core + reference + emulator migrated;
+API edges convert; feed stays float64). Verified live (book 20 levels/side, uncrossed; HTTP emits
+exact decimal strings). Phases 1–4, `pkg/decimal`, and the float64→Decimal migration done &
+reviewed. **Next:** Phase 5 — Trade replay sync; then Phases 6–11.
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
