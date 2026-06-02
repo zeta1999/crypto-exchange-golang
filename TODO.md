@@ -40,12 +40,13 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [ ] (deferred to Phase 4) partial-fill top-up accounting; venue/refresh wiring into configs/cmd
 
 ## Phase 4 — Return-to-Reference [a]
-- [ ] fill accounting (carried from Phase 3): top partially-eaten synthetic levels back to reference size; track desired vs resting remainder; volume compare with tolerance not `==`
-- [ ] seeder lock: snapshot diff → release mutex → apply engine calls (don't block Clear/shutdown)
-- [ ] `internal/emulator/rtr.go`: drain stale synthetics first
-- [ ] progressive convergence over `tau` (exp decay of deviation)
-- [ ] track spot moves (shift synthetic liquidity)
-- [ ] scenario test: perturb → converge within `tau` (seeded, deterministic)
+- [x] fill accounting: top partially-eaten levels back up; generation-stamped IDs; volEps tolerance compare
+- [x] `internal/emulator/rtr.go`: stale synthetics drain toward zero (decay)
+- [x] progressive convergence over `tau` (exp decay: α=1−e^(−dt/τ))
+- [x] track spot moves (new levels ramp in, departed levels drain — same Converge path)
+- [x] scenario test: perturb → converge (seeded, deterministic) + fill-accounting soundness
+- [x] brutal review + fixes (generation IDs, single fill path, RTR.Run dt)
+- [ ] (still open) seeder lock held across engine calls — acceptable now; revisit if Clear/shutdown latency matters at scale
 
 ## Phase 5 — Trade replay sync
 - [ ] `internal/emulator/replay.go`: tape trade → marketable order vs engine book

@@ -3,7 +3,7 @@
 _Last updated: 2026-06-02_
 
 ## Current phase
-**Phase 3 — Emulator seeding** ✅ complete (CI green, live-verified end-to-end, brutal review applied) → next: **Phase 4 — Return-to-Reference**
+**Phase 4 — Return-to-Reference** ✅ complete (CI green, brutal review applied) → next: **wire emulator into runnable binary, then Phase 5 — Trade replay sync**
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -15,7 +15,7 @@ _Last updated: 2026-06-02_
 | 1 | Feed ingestion layer | ☑ | channel-based `feed.Source`; Binance @trade+@depth20, Coinbase market_trades + from-scratch level2; replay+record; `cmd/feedcat`. CI green; **live-verified** both venues + deterministic replay; brutal review applied (determinism, book-integrity, liveness/reconnect, lifecycle test). |
 | 2 | Reference book | ☑ | `internal/reference` Book (snapshot+diff, float-keyed levels, crossed-book detection, staleness) + Set (per-instrument routing, Consume). Coinbase connection-global seq-gap detection in adapter. CI green; live BTC-USD book uncrossed; review applied. |
 | 3 | Emulator seeding | ☑ | `internal/emulator.Seeder` mirrors `reference.Book` → tagged synthetic engine orders; reconcile (cancel-before-place, resize, skip crossed), not-found-tolerant, Run/Clear. CI green; live BTC-USD top-20 mirrors exactly, 0 trades; review applied (proved no self-match). |
-| 4 | Return-to-Reference [a] | ☐ | convergence controller |
+| 4 | Return-to-Reference [a] | ☑ | `Seeder.Converge(alpha)` (target=cur+α·(ref−cur)); fill accounting via generation-stamped IDs + trade hook; `RTR` exp-decay controller (α=1−e^(−dt/τ)). CI green; DoD scenario (user trade → gradual reconverge) deterministic; review applied. |
 | 5 | Trade replay sync | ☐ | inject real tape in sync |
 | 6 | Configurable toxicity [b] | ☐ | Kyle λ + VPIN, weighting knobs |
 | 7 | Scenario & fault injection (test bed) | ☐ | trace replay, artificial latency, price-shift / arb scenarios |
