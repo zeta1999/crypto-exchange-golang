@@ -3,6 +3,7 @@ package emulator
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/toxicity"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
+
+func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
 // toxicSweepSize is intentionally large: the adverse sweep is an
 // immediate-or-cancel order bounded by its price cap, not its size, so it
@@ -64,6 +67,12 @@ func (ti *ToxicInjector) Observe(ctx context.Context, t *feed.Trade) ([]*orderbo
 	default:
 		return nil, nil
 	}
+	// strconv.ParseFloat yields NaN/±Inf without error, so a malformed print
+	// can carry a non-finite price/qty; feeding it to the model would poison
+	// lambda and later panic decimal.FromFloat. Drop it (matching TapeReplay).
+	if !finite(t.Price) || !finite(t.Quantity) || t.Quantity <= 0 {
+		return nil, nil
+	}
 	ti.model.Observe(t.Price, t.Quantity, buy)
 
 	scale := ti.model.Config().Scale
@@ -81,13 +90,32 @@ func (ti *ToxicInjector) Observe(ctx context.Context, t *feed.Trade) ([]*orderbo
 }
 
 // sweep injects the adverse IOC order in the informed-flow direction, capped
-// scale·Impact beyond the current touch.
+// scale·Impact beyond the current touch — but never more than one spread
+// beyond it. Bounding the penetration is what keeps a single fire from
+// clearing arbitrarily deep into the book (and into far-away user orders): the
+// generous IOC size only ever clears the thin band from the touch out to the
+// cap. The economic effect is incremental — it picks off resting user makers
+// just beyond where the raw tape print already traded ("the market moves and
+// executes against you").
+//
+// Note: the cap is read from the reference book (the mirror target) while the
+// IOC executes against the engine book; the seeder/RTR keep them close but not
+// lock-step, so the penetration is approximate.
 func (ti *ToxicInjector) sweep(ctx context.Context, buy bool, scale float64) ([]*orderbook.Trade, error) {
 	bid, ask, ok := ti.ref.BestBidAsk()
 	if !ok {
 		return nil, nil
 	}
-	offset := decimal.FromFloat(scale * ti.model.Impact()) // ≥ 0
+	impact := ti.model.Impact()
+	if !finite(impact) || impact < 0 {
+		impact = 0
+	}
+	offsetF := scale * impact
+	// Clamp penetration to at most one spread beyond the touch.
+	if spread := ask.Price.Sub(bid.Price).Float64(); spread > 0 && offsetF > spread {
+		offsetF = spread
+	}
+	offset := decimal.FromFloat(offsetF) // ≥ 0, finite, bounded
 
 	side := orderbook.SideBuy
 	capPrice := ask.Price.Add(offset) // buy sweep lifts asks up to ask+offset

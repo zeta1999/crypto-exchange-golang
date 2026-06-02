@@ -2,6 +2,7 @@ package emulator
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -83,6 +84,19 @@ func TestToxicityScaleZeroIsPureRTR(t *testing.T) {
 	}
 	if remaining() != 1000 { // full 1.0 still resting
 		t.Errorf("user sell must be untouched at scale=0, %d milli-units remain", remaining())
+	}
+}
+
+func TestToxicityNonFiniteDoesNotPanic(t *testing.T) {
+	_, inj, _ := toxicSetup(t, 1.0)
+	for _, bad := range []*feed.Trade{
+		{Instrument: "BTC-USD", Side: "buy", Price: math.NaN(), Quantity: 1},
+		{Instrument: "BTC-USD", Side: "sell", Price: math.Inf(1), Quantity: 1},
+		{Instrument: "BTC-USD", Side: "buy", Price: 100, Quantity: math.Inf(1)},
+	} {
+		if tr, err := inj.Observe(context.Background(), bad); err != nil || len(tr) != 0 {
+			t.Errorf("non-finite %+v: trades=%v err=%v (want dropped)", bad, tr, err)
+		}
 	}
 }
 

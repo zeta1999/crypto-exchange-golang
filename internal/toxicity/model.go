@@ -32,6 +32,14 @@ func (c Config) withDefaults() Config {
 	if c.Buckets <= 0 {
 		c.Buckets = 50
 	}
+	// Negative weights are meaningless (they'd invert the model); clamp to 0
+	// to disable that component rather than silently inverting it.
+	if c.KyleWeight < 0 {
+		c.KyleWeight = 0
+	}
+	if c.VPINWeight < 0 {
+		c.VPINWeight = 0
+	}
 	return c
 }
 

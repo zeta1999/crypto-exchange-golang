@@ -29,6 +29,13 @@ func (v *vpin) observe(qty float64, buy bool) {
 	if v.bucketVol <= 0 || qty <= 0 {
 		return
 	}
+	// Cap a single print's contribution to one bucket's worth, so one large
+	// (e.g. institutional) print can't flood the window with many maximal-
+	// imbalance buckets and saturate VPIN — VPIN should reflect *persistent*
+	// one-sided flow, not a single block.
+	if qty > v.bucketVol {
+		qty = v.bucketVol
+	}
 	for qty > 0 {
 		room := v.bucketVol - (v.curBuy + v.curSell)
 		take := qty
