@@ -23,20 +23,24 @@ import (
 type syntheticExemptMargin struct{ inner engine.MarginValidator }
 
 func (m syntheticExemptMargin) Validate(ctx context.Context, ord *orderbook.Order) error {
-	if ord.Metadata[emulator.MetadataKey] == emulator.MetadataValue {
+	// Emulator-internal orders (mirrored synthetic liquidity, replayed tape
+	// trades) are not subject to user credit limits.
+	if ord.Metadata[emulator.MetadataKey] == emulator.MetadataValue ||
+		ord.Metadata[emulator.TapeMetadataKey] == "true" {
 		return nil
 	}
 	return m.inner.Validate(ctx, ord)
 }
 
 // newFeedSource builds the venue feed for the configured instruments,
-// subscribing to order-book updates (the reference book's input).
+// subscribing to order-book updates (the reference book's input) and trades
+// (the tape replayed against resting orders).
 func newFeedSource(venue string, instruments []string) (feed.Source, error) {
 	switch venue {
 	case "coinbase":
-		return coinbase.New(coinbase.Config{Symbols: instruments, FeedTypes: []string{"orderbook"}}), nil
+		return coinbase.New(coinbase.Config{Symbols: instruments, FeedTypes: []string{"orderbook", "trades"}}), nil
 	case "binance":
-		return binance.New(binance.Config{Symbols: instruments, FeedTypes: []string{"orderbook"}}), nil
+		return binance.New(binance.Config{Symbols: instruments, FeedTypes: []string{"orderbook", "trades"}}), nil
 	default:
 		return nil, fmt.Errorf("unknown emulator venue %q (want coinbase|binance)", venue)
 	}
@@ -60,9 +64,36 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 	}
 
 	refs := reference.NewSet()
+	tapes := make(map[string]*emulator.TapeReplay, len(cfg.Instruments))
+	for _, sym := range cfg.Instruments {
+		tapes[sym] = emulator.NewTapeReplay(eng, sym)
+	}
+	// One dispatcher routes the single feed channel: book frames rebuild the
+	// reference book; trade prints are replayed against the engine so resting
+	// (user + synthetic) orders fill in sync with the live tape.
 	group.Go(func() error {
-		refs.Consume(ctx, events) // returns when ctx is cancelled / feed closes
-		return nil
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case ev, ok := <-events:
+				if !ok {
+					return nil
+				}
+				switch ev.Kind {
+				case feed.EventBook:
+					refs.Apply(ev)
+				case feed.EventTrade:
+					if ev.Trade != nil {
+						if tr := tapes[ev.Trade.Instrument]; tr != nil {
+							if _, err := tr.Inject(ctx, ev.Trade); err != nil {
+								log.Printf("tape inject error: %v", err)
+							}
+						}
+					}
+				}
+			}
+		}
 	})
 
 	refresh := time.Duration(cfg.Reference.RefreshMs) * time.Millisecond
