@@ -3,7 +3,7 @@
 _Last updated: 2026-06-02_
 
 ## Current phase
-**Phase 1 — Feed ingestion** ✅ complete (CI green, live-verified, brutal review applied) → next: **Phase 2 — Reference book**
+**Phase 2 — Reference book** ✅ complete (CI green, live-verified, brutal review applied) → next: **Phase 3 — Emulator seeding**
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -13,7 +13,7 @@ _Last updated: 2026-06-02_
 |---|-------|-------|-------|
 | 0 | Foundations, CI, docs | ☑ | docs + `ci.sh` + Makefile committed; baseline CI **green**; brutal review done + fixes applied |
 | 1 | Feed ingestion layer | ☑ | channel-based `feed.Source`; Binance @trade+@depth20, Coinbase market_trades + from-scratch level2; replay+record; `cmd/feedcat`. CI green; **live-verified** both venues + deterministic replay; brutal review applied (determinism, book-integrity, liveness/reconnect, lifecycle test). |
-| 2 | Reference book | ☐ | snapshot+diff per instrument |
+| 2 | Reference book | ☑ | `internal/reference` Book (snapshot+diff, float-keyed levels, crossed-book detection, staleness) + Set (per-instrument routing, Consume). Coinbase connection-global seq-gap detection in adapter. CI green; live BTC-USD book uncrossed; review applied. |
 | 3 | Emulator seeding | ☐ | mirror reference liquidity as synthetic orders |
 | 4 | Return-to-Reference [a] | ☐ | convergence controller |
 | 5 | Trade replay sync | ☐ | inject real tape in sync |
@@ -59,5 +59,5 @@ _Last updated: 2026-06-02_
 - None.
 
 ## Next actions
-1. Brutal review subagent on Phase 1 feed package; address findings; re-run CI.
-2. Begin Phase 2 reference book (consume `feed.Event` stream → per-instrument LOB).
+1. Begin Phase 3 emulator seeding: map `reference.Book` levels → synthetic
+   resting orders in `internal/engine`; reconcile loop; tag synthetic orders.

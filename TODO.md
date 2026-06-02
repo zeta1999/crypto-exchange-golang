@@ -24,10 +24,12 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] brutal review subagent + fixes (recv-time determinism, parse-failure drops, read deadline + ctx-close, RunReconnect backoff, error counting, lifecycle test)
 
 ## Phase 2 — Reference book
-- [ ] `internal/reference/book.go`: per-instrument LOB, snapshot+diff apply
-- [ ] sequence-gap detection + resync, staleness flag
-- [ ] `BestBidAsk`, `Depth(n)`, `Mid`, `Spread`, immutable snapshot
-- [ ] tests vs recorded feed fixtures (deterministic book state)
+- [x] `internal/reference/book.go`: per-instrument LOB, snapshot+diff apply (float-keyed)
+- [x] sequence-gap detection (connection-global, in Coinbase adapter), staleness + crossed-book flags
+- [x] `BestBidAsk`, `Depth(n)`, `Mid`, `Spread`, `Crossed`, immutable `Snapshot`
+- [x] `internal/reference/set.go`: per-instrument routing + `Consume`
+- [x] tests vs recorded feed fixtures (deterministic book state) + live verify
+- [x] brutal review subagent + fixes (seq-design C1, key-collapse H2, crossed-book H3)
 
 ## Phase 3 — Emulator seeding
 - [ ] `internal/emulator/seeder.go`: reference levels → synthetic resting orders (tagged)
