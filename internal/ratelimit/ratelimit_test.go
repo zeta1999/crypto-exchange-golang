@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -124,5 +125,16 @@ func TestConcurrentAllow(t *testing.T) {
 	wg.Wait()
 	if allowed < 1 {
 		t.Fatal("expected some allowed under concurrency")
+	}
+}
+
+func TestKeyedLimiterMaxKeysCapped(t *testing.T) {
+	k := NewKeyedLimiter(100, 100, time.Hour) // long ttl so idle sweep won't evict
+	k.maxKeys = 50
+	for i := 0; i < 500; i++ {
+		k.Allow(fmt.Sprintf("key-%d", i))
+	}
+	if n := k.Len(); n > 50 {
+		t.Errorf("bucket map exceeded cap: %d > 50", n)
 	}
 }

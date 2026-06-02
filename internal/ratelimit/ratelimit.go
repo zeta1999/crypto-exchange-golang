@@ -68,10 +68,17 @@ type KeyedLimiter struct {
 	ttl   time.Duration
 	now   func() time.Time
 
+	maxKeys int
+
 	mu      sync.Mutex
 	buckets map[string]*keyedBucket
 	lastGC  time.Time
 }
+
+// defaultMaxKeys hard-caps live per-key buckets, so a flood of distinct
+// keys/IPs within one ttl window (before the periodic sweep runs) cannot grow
+// the map unboundedly.
+const defaultMaxKeys = 100_000
 
 type keyedBucket struct {
 	lim  *Limiter
@@ -92,6 +99,7 @@ func newKeyedLimiterClock(rate float64, burst int, ttl time.Duration, now func()
 		rate:    rate,
 		burst:   burst,
 		ttl:     ttl,
+		maxKeys: defaultMaxKeys,
 		now:     now,
 		buckets: make(map[string]*keyedBucket),
 		lastGC:  now(),
@@ -107,6 +115,15 @@ func (k *KeyedLimiter) Allow(key string) bool {
 	now := k.now()
 	b, ok := k.buckets[key]
 	if !ok {
+		// Enforce the hard cap before inserting a new bucket: sweep idle ones
+		// (ignoring the periodic interval), then if still full evict the
+		// least-recently-seen, so the map can never exceed maxKeys.
+		if k.maxKeys > 0 && len(k.buckets) >= k.maxKeys {
+			k.sweepLocked(now)
+			if len(k.buckets) >= k.maxKeys {
+				k.evictOldestLocked()
+			}
+		}
 		b = &keyedBucket{lim: newLimiterClock(k.rate, k.burst, k.now)}
 		k.buckets[key] = b
 	}
@@ -122,11 +139,32 @@ func (k *KeyedLimiter) gcLocked(now time.Time) {
 	if now.Sub(k.lastGC) < k.ttl {
 		return
 	}
+	k.sweepLocked(now)
+}
+
+// sweepLocked evicts buckets idle longer than ttl. Caller holds k.mu.
+func (k *KeyedLimiter) sweepLocked(now time.Time) {
 	k.lastGC = now
 	for key, b := range k.buckets {
 		if now.Sub(b.seen) > k.ttl {
 			delete(k.buckets, key)
 		}
+	}
+}
+
+// evictOldestLocked removes the single least-recently-seen bucket, to keep the
+// map at the hard cap when a sweep didn't free anything. Caller holds k.mu.
+func (k *KeyedLimiter) evictOldestLocked() {
+	var oldestKey string
+	var oldest time.Time
+	first := true
+	for key, b := range k.buckets {
+		if first || b.seen.Before(oldest) {
+			oldestKey, oldest, first = key, b.seen, false
+		}
+	}
+	if !first {
+		delete(k.buckets, oldestKey)
 	}
 }
 
