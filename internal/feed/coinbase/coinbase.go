@@ -77,31 +77,18 @@ func (s *Source) channels() []string {
 	return out
 }
 
+// readTimeout bounds a single read so a silent (half-open) socket trips the
+// deadline and the reconnect loop recovers instead of blocking forever.
+const readTimeout = 60 * time.Second
+
 // Start opens the websocket and returns a channel of normalized events.
 func (s *Source) Start(ctx context.Context) (<-chan feed.Event, error) {
 	out := make(chan feed.Event, 1024)
 	go func() {
 		defer close(out)
-		for {
-			if ctx.Err() != nil {
-				s.SetState("closed")
-				return
-			}
-			err := s.connectAndStream(ctx, out)
-			if ctx.Err() != nil {
-				s.SetState("closed")
-				return
-			}
-			if err != nil {
-				s.RecordError()
-				s.SetState("reconnecting")
-				slog.Warn("coinbase connection lost, reconnecting", "error", err)
-				select {
-				case <-ctx.Done():
-				case <-time.After(5 * time.Second):
-				}
-			}
-		}
+		feed.RunReconnect(ctx, s.StatusTracker, func(ctx context.Context) error {
+			return s.connectAndStream(ctx, out)
+		})
 	}()
 	return out, nil
 }
@@ -111,6 +98,9 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 	if len(channels) == 0 {
 		return fmt.Errorf("coinbase: no channels configured")
 	}
+	if len(s.symbols) == 0 {
+		return fmt.Errorf("coinbase: no symbols configured")
+	}
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	conn, _, err := dialer.DialContext(ctx, s.wsURL, nil)
@@ -118,6 +108,19 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 		return fmt.Errorf("dial coinbase: %w", err)
 	}
 	defer conn.Close()
+
+	// A blocking ReadMessage doesn't observe ctx; close the conn on
+	// cancellation so the read unwinds promptly. The done channel stops the
+	// watcher when the stream returns for any other reason.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
 
 	// Advanced Trade subscribes one channel per message (unlike the legacy
 	// Exchange feed's "channels" array).
@@ -139,13 +142,15 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 		if ctx.Err() != nil {
 			return nil
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return fmt.Errorf("read: %w", err)
 		}
-		start := time.Now()
+		s.RecordUpdate(len(msg), 0)
 		events, perr := ParseMessage(msg)
 		if perr != nil {
+			s.RecordError()
 			slog.Debug("coinbase parse error", "error", perr)
 		}
 		for _, ev := range events {
@@ -155,7 +160,6 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 				return nil
 			}
 		}
-		s.RecordUpdate(len(msg), time.Since(start))
 	}
 }
 
@@ -200,11 +204,15 @@ func ParseMessage(raw []byte) ([]feed.Event, error) {
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("coinbase: %w", err)
 	}
+	// Server send time, used as the book timestamp fallback when an update
+	// carries no per-level event_time.
+	envTime, _ := time.Parse(time.RFC3339Nano, env.Timestamp)
+
 	switch env.Channel {
 	case "market_trades":
 		return parseTrades(env.Events)
 	case "l2_data":
-		return parseL2(env.Events, env.SequenceNum)
+		return parseL2(env.Events, env.SequenceNum, envTime)
 	default:
 		return nil, nil
 	}
@@ -218,8 +226,11 @@ func parseTrades(rawEvents json.RawMessage) ([]feed.Event, error) {
 	var out []feed.Event
 	for _, ev := range events {
 		for _, t := range ev.Trades {
-			price, _ := strconv.ParseFloat(t.Price, 64)
-			qty, _ := strconv.ParseFloat(t.Size, 64)
+			price, perr := strconv.ParseFloat(t.Price, 64)
+			qty, qerr := strconv.ParseFloat(t.Size, 64)
+			if perr != nil || qerr != nil {
+				continue // drop rather than emit a zero-priced trade
+			}
 			ts, _ := time.Parse(time.RFC3339Nano, t.Time)
 			out = append(out, feed.Event{
 				Kind: feed.EventTrade,
@@ -240,7 +251,7 @@ func parseTrades(rawEvents json.RawMessage) ([]feed.Event, error) {
 	return out, nil
 }
 
-func parseL2(rawEvents json.RawMessage, seq uint64) ([]feed.Event, error) {
+func parseL2(rawEvents json.RawMessage, seq uint64, envTime time.Time) ([]feed.Event, error) {
 	var events []l2Event
 	if err := json.Unmarshal(rawEvents, &events); err != nil {
 		return nil, fmt.Errorf("coinbase l2: %w", err)
@@ -255,8 +266,14 @@ func parseL2(rawEvents json.RawMessage, seq uint64) ([]feed.Event, error) {
 		}
 		var latest time.Time
 		for _, u := range ev.Updates {
-			price, _ := strconv.ParseFloat(u.PriceLevel, 64)
-			qty, _ := strconv.ParseFloat(u.NewQuantity, 64)
+			price, perr := strconv.ParseFloat(u.PriceLevel, 64)
+			qty, qerr := strconv.ParseFloat(u.NewQuantity, 64)
+			if perr != nil || qerr != nil {
+				// Dropping a level is safer than emitting price/qty 0:
+				// qty 0 is the "remove this price" signal (see
+				// feed.LOBSnapshot) and would corrupt the book.
+				continue
+			}
 			level := feed.LOBLevel{
 				Price:           price,
 				Quantity:        qty,
@@ -272,6 +289,11 @@ func parseL2(rawEvents json.RawMessage, seq uint64) ([]feed.Event, error) {
 			if t, err := time.Parse(time.RFC3339Nano, u.EventTime); err == nil && t.After(latest) {
 				latest = t
 			}
+		}
+		// Prefer the latest per-level event_time; fall back to the frame's
+		// server timestamp so a book event is never left zero-timed.
+		if latest.IsZero() {
+			latest = envTime
 		}
 		book.Timestamp = latest
 		out = append(out, feed.Event{Kind: feed.EventBook, Book: book})

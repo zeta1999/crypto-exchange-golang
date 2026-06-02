@@ -2,6 +2,7 @@ package coinbase
 
 import (
 	"testing"
+	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
 )
@@ -97,6 +98,48 @@ func TestParseMessageIgnoresOther(t *testing.T) {
 	}
 	if _, err := ParseMessage([]byte(`}{`)); err == nil {
 		t.Error("expected error on malformed JSON")
+	}
+}
+
+func TestParseL2SkipsUnparseableLevel(t *testing.T) {
+	// Bad price_level / new_quantity must be dropped, not emitted as a zero
+	// (a zero quantity reads as a level removal downstream).
+	raw := []byte(`{"channel":"l2_data","sequence_num":1,"events":[{"type":"update","product_id":"BTC-USD","updates":[{"side":"bid","price_level":"oops","new_quantity":"1"},{"side":"bid","price_level":"41999.0","new_quantity":"2"}]}]}`)
+	events, err := ParseMessage(raw)
+	if err != nil {
+		t.Fatalf("ParseMessage: %v", err)
+	}
+	b := events[0].Book
+	if len(b.Bids) != 1 || b.Bids[0].Price != 41999.0 {
+		t.Fatalf("want 1 valid bid (bad dropped), got %+v", b.Bids)
+	}
+}
+
+func TestParseL2FallsBackToEnvelopeTime(t *testing.T) {
+	// No per-update event_time => book timestamp falls back to the frame's
+	// server timestamp rather than staying zero.
+	raw := []byte(`{"channel":"l2_data","timestamp":"2026-06-02T01:02:03Z","sequence_num":1,"events":[{"type":"update","product_id":"BTC-USD","updates":[{"side":"bid","price_level":"1","new_quantity":"1"}]}]}`)
+	events, err := ParseMessage(raw)
+	if err != nil {
+		t.Fatalf("ParseMessage: %v", err)
+	}
+	b := events[0].Book
+	if b.Timestamp.IsZero() {
+		t.Fatal("book timestamp should fall back to envelope time")
+	}
+	if got := b.Timestamp.UTC().Format(time.RFC3339); got != "2026-06-02T01:02:03Z" {
+		t.Errorf("ts = %s", got)
+	}
+}
+
+func TestParseTradesSkipsBadNumbers(t *testing.T) {
+	raw := []byte(`{"channel":"market_trades","events":[{"type":"update","trades":[{"trade_id":"1","product_id":"BTC-USD","price":"x","size":"1","side":"BUY","time":"2026-06-02T00:00:00Z"}]}]}`)
+	events, err := ParseMessage(raw)
+	if err != nil {
+		t.Fatalf("ParseMessage: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("want bad trade dropped, got %d events", len(events))
 	}
 }
 

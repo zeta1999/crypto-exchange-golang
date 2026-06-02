@@ -2,6 +2,7 @@ package feed
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -30,6 +31,56 @@ type Status struct {
 	LatencyMs     float64   `json:"latency_ms"`
 	ErrorCount    uint64    `json:"error_count"`
 	BytesReceived uint64    `json:"bytes_received"`
+}
+
+// Reconnect backoff bounds shared by the live adapters.
+const (
+	reconnectBase = 1 * time.Second
+	reconnectMax  = 30 * time.Second
+	// stableSession is how long a connection must last before its drop is
+	// treated as a fresh failure (backoff reset) rather than a flapping one.
+	stableSession = 1 * time.Minute
+)
+
+// RunReconnect drives connect in a loop until ctx is cancelled, applying
+// capped exponential backoff between failures. connect is expected to block
+// for the life of one connection and return nil only on ctx cancellation
+// (a transient error triggers a reconnect). It centralizes the
+// reconnect/backoff/ctx-check logic so each adapter's Start stays a thin
+// goroutine that just closes its event channel on return.
+func RunReconnect(ctx context.Context, t *StatusTracker, connect func(context.Context) error) {
+	backoff := reconnectBase
+	for {
+		if ctx.Err() != nil {
+			t.SetState("closed")
+			return
+		}
+		start := time.Now()
+		err := connect(ctx)
+		if ctx.Err() != nil {
+			t.SetState("closed")
+			return
+		}
+		if err == nil {
+			return
+		}
+		// A connection that survived a while was healthy; don't let an
+		// eventual drop inherit an inflated backoff.
+		if time.Since(start) > stableSession {
+			backoff = reconnectBase
+		}
+		t.RecordError()
+		t.SetState("reconnecting")
+		slog.Warn("feed connection lost, reconnecting",
+			"source", t.name, "error", err, "backoff", backoff)
+		select {
+		case <-ctx.Done():
+		case <-time.After(backoff):
+		}
+		if backoff *= 2; backoff > reconnectMax {
+			backoff = reconnectMax
+		}
+	}
 }
 
 // StatusTracker is a small concurrency-safe helper that the live adapters

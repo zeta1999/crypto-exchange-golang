@@ -80,33 +80,21 @@ func (s *Source) streams() []string {
 	return out
 }
 
+// readTimeout bounds how long a single read may block. Binance pushes
+// continuously, so a silent (half-open) socket trips this deadline and the
+// reconnect loop recovers instead of blocking forever.
+const readTimeout = 60 * time.Second
+
 // Start opens the websocket and returns a channel of normalized events.
-// It reconnects with a fixed backoff until ctx is cancelled, then closes
-// the channel.
+// It reconnects with capped exponential backoff until ctx is cancelled,
+// then closes the channel.
 func (s *Source) Start(ctx context.Context) (<-chan feed.Event, error) {
 	out := make(chan feed.Event, 1024)
 	go func() {
 		defer close(out)
-		for {
-			if ctx.Err() != nil {
-				s.SetState("closed")
-				return
-			}
-			err := s.connectAndStream(ctx, out)
-			if ctx.Err() != nil {
-				s.SetState("closed")
-				return
-			}
-			if err != nil {
-				s.RecordError()
-				s.SetState("reconnecting")
-				slog.Warn("binance connection lost, reconnecting", "error", err)
-				select {
-				case <-ctx.Done():
-				case <-time.After(5 * time.Second):
-				}
-			}
-		}
+		feed.RunReconnect(ctx, s.StatusTracker, func(ctx context.Context) error {
+			return s.connectAndStream(ctx, out)
+		})
 	}()
 	return out, nil
 }
@@ -125,6 +113,19 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 	}
 	defer conn.Close()
 
+	// A blocking ReadMessage doesn't observe ctx; close the conn on
+	// cancellation so the read unwinds promptly. The done channel stops the
+	// watcher when the stream returns for any other reason.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
+
 	s.SetState("connected")
 	slog.Info("binance connected", "streams", len(streams))
 
@@ -132,13 +133,16 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 		if ctx.Err() != nil {
 			return nil
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return fmt.Errorf("read: %w", err)
 		}
-		start := time.Now()
-		events, perr := ParseMessage(msg)
+		recv := time.Now()
+		s.RecordUpdate(len(msg), 0)
+		events, perr := ParseMessage(msg, recv)
 		if perr != nil {
+			s.RecordError()
 			slog.Debug("binance parse error", "error", perr)
 		}
 		for _, ev := range events {
@@ -148,7 +152,6 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 				return nil
 			}
 		}
-		s.RecordUpdate(len(msg), time.Since(start))
 	}
 }
 
@@ -175,9 +178,11 @@ type depthMsg struct {
 }
 
 // ParseMessage decodes one combined-stream frame into zero or more
-// normalized events. It is stateless and pure so it can be unit-tested
-// against recorded fixtures without a live socket.
-func ParseMessage(raw []byte) ([]feed.Event, error) {
+// normalized events. It is pure (deterministic in its inputs) so it can be
+// unit-tested against recorded fixtures without a live socket. recv is the
+// time the frame was read; it stamps the book snapshot, which — unlike a
+// trade — carries no event time on the @depth20 wire.
+func ParseMessage(raw []byte, recv time.Time) ([]feed.Event, error) {
 	var wrapper streamMsg
 	if err := json.Unmarshal(raw, &wrapper); err != nil || wrapper.Stream == "" {
 		return nil, fmt.Errorf("binance: not a combined-stream message")
@@ -190,7 +195,7 @@ func ParseMessage(raw []byte) ([]feed.Event, error) {
 		}
 		return []feed.Event{ev}, nil
 	case strings.Contains(wrapper.Stream, "@depth"):
-		ev, err := parseDepth(wrapper.Stream, wrapper.Data)
+		ev, err := parseDepth(wrapper.Stream, wrapper.Data, recv)
 		if err != nil {
 			return nil, err
 		}
@@ -205,8 +210,11 @@ func parseTrade(data json.RawMessage) (feed.Event, error) {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return feed.Event{}, fmt.Errorf("binance trade: %w", err)
 	}
-	price, _ := strconv.ParseFloat(msg.Price, 64)
-	qty, _ := strconv.ParseFloat(msg.Quantity, 64)
+	price, perr := strconv.ParseFloat(msg.Price, 64)
+	qty, qerr := strconv.ParseFloat(msg.Quantity, 64)
+	if perr != nil || qerr != nil {
+		return feed.Event{}, fmt.Errorf("binance trade: bad price/qty %q/%q", msg.Price, msg.Quantity)
+	}
 	side := "buy"
 	if msg.IsMaker {
 		side = "sell"
@@ -227,7 +235,7 @@ func parseTrade(data json.RawMessage) (feed.Event, error) {
 	}, nil
 }
 
-func parseDepth(stream string, data json.RawMessage) (feed.Event, error) {
+func parseDepth(stream string, data json.RawMessage, recv time.Time) (feed.Event, error) {
 	var msg depthMsg
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return feed.Event{}, fmt.Errorf("binance depth: %w", err)
@@ -244,7 +252,7 @@ func parseDepth(stream string, data json.RawMessage) (feed.Event, error) {
 		Book: &feed.LOBSnapshot{
 			Instrument: symbol,
 			Exchange:   "binance",
-			Timestamp:  time.Now(),
+			Timestamp:  recv,
 			Snapshot:   true, // @depth20 is a full top-of-book replacement
 			Bids:       parseLevels(msg.Bids),
 			Asks:       parseLevels(msg.Asks),
@@ -252,14 +260,21 @@ func parseDepth(stream string, data json.RawMessage) (feed.Event, error) {
 	}, nil
 }
 
+// parseLevels converts [price, qty] string pairs to levels, skipping any
+// that fail to parse. A skipped level is dropped rather than emitted as a
+// zero — a zero quantity is the book's "remove this price" signal, so a
+// silent parse-to-zero would corrupt the book downstream.
 func parseLevels(raw [][]string) []feed.LOBLevel {
 	levels := make([]feed.LOBLevel, 0, len(raw))
 	for _, l := range raw {
 		if len(l) < 2 {
 			continue
 		}
-		price, _ := strconv.ParseFloat(l[0], 64)
-		qty, _ := strconv.ParseFloat(l[1], 64)
+		price, perr := strconv.ParseFloat(l[0], 64)
+		qty, qerr := strconv.ParseFloat(l[1], 64)
+		if perr != nil || qerr != nil {
+			continue
+		}
 		levels = append(levels, feed.LOBLevel{
 			Price:           price,
 			Quantity:        qty,

@@ -35,6 +35,10 @@ func main() {
 	duration := flag.Duration("duration", 0, "stop after this long (0 = run until interrupted / EOF)")
 	flag.Parse()
 
+	if *record != "" && *record == *file {
+		log.Fatalf("feedcat: -record would overwrite the -file replay input %q", *file)
+	}
+
 	src, err := buildSource(*venue, splitCSV(*symbolsCSV), *file)
 	if err != nil {
 		log.Fatalf("feedcat: %v", err)
@@ -66,11 +70,11 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("feedcat: done — %d trades, %d book updates", trades, books)
+			log.Printf("feedcat: done — %d trades, %d book updates; status=%+v", trades, books, src.Status())
 			return
 		case ev, ok := <-events:
 			if !ok {
-				log.Printf("feedcat: source closed — %d trades, %d book updates", trades, books)
+				log.Printf("feedcat: source closed — %d trades, %d book updates; status=%+v", trades, books, src.Status())
 				return
 			}
 			if rec != nil {
