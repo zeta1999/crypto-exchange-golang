@@ -78,7 +78,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] brutal review + fixes (bounded sweep, panic guard, weight/VPIN clamps)
 
 ## Phase 7 — Scenario & fault injection (OMS / strategy test bed)
-- [ ] Trace replay (full): feed whole emulator from a recorded trace, deterministic, `speed`
+- [x] Trace replay (full): `venue: replay` feeds the whole emulator from a recorded trace, offline + deterministic (reuses Phase 1 replay.Source; integration-tested + live-verified). `speed` pacing reserved/deferred.
 - [x] `internal/emulator/latency.go`: artificial latency — feed→book (wired), order_ack/fill_report (TODO: apply at API edges, Phase 8/9), per-edge, jitter
 - [x] `internal/emulator/priceshift.go`: artificial price shift — `offset_bps` + `scale` per venue (wired into dispatcher; shifts both float Price and PriceDecimal)
 - [ ] cross-venue dislocation harness (two venues driven apart → closeable arbitrage)
