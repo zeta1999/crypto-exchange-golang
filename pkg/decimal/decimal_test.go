@@ -259,3 +259,45 @@ func BenchmarkMul(b *testing.B) {
 		_ = x.Mul(y)
 	}
 }
+
+func TestDivTruncatesTowardZero(t *testing.T) {
+	// 1/3 and -1/3 both truncate toward zero (not floor), to 18 digits.
+	if got := FromInt(1).Div(FromInt(3)).StringPrec(18); got != "0.333333333333333333" {
+		t.Errorf("1/3 = %q", got)
+	}
+	if got := FromInt(-1).Div(FromInt(3)).StringPrec(18); got != "-0.333333333333333333" {
+		t.Errorf("-1/3 = %q (must truncate toward zero, not floor)", got)
+	}
+	// Exact and sign combinations.
+	if got := MustParse("-7").Div(FromInt(2)); got != MustParse("-3.5") {
+		t.Errorf("-7/2 = %v", got)
+	}
+	if got := MustParse("100").Div(MustParse("-4")); got != MustParse("-25") {
+		t.Errorf("100/-4 = %v", got)
+	}
+}
+
+func TestDivOverflowPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("expected overflow panic")
+		}
+	}()
+	// 1e20 / 1e-18 = 1e38 — exceeds the 128-bit range.
+	MustParse("100000000000000000000").Div(MustParse("0.000000000000000001"))
+}
+
+func TestDivIsAllocationFree(t *testing.T) {
+	a, b := MustParse("70123.456789"), MustParse("3.14159")
+	if n := testing.AllocsPerRun(1000, func() { _ = a.Div(b) }); n != 0 {
+		t.Errorf("Div allocates %v times/op, want 0", n)
+	}
+}
+
+func BenchmarkDiv(b *testing.B) {
+	x, y := MustParse("70123.45"), MustParse("3.14159")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = x.Div(y)
+	}
+}

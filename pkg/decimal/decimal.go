@@ -278,20 +278,28 @@ func (d Decimal) Mul(e Decimal) Decimal {
 	return fromMag(q1, q0, aneg != bneg)
 }
 
-// Div returns d / e (= d.raw * scale / e.raw, truncated toward zero). Panics
-// on division by zero or overflow.
+// Div returns d / e (= d.raw * scale / e.raw, truncated toward zero). Panics on
+// division by zero or overflow. Allocation-free: the numerator |d|·scale is a
+// 128×64→≤192-bit product (in 256-bit limbs) and the ÷|e| is a 256÷128 binary
+// long division (div256by128). Validated against a big.Rat oracle in tests.
 //
-// Unlike Mul (now allocation-free limb math), Div keeps the big.Int
-// intermediate: it's a rare path (mostly mid/average prices, not the matching
-// hot loop), and a correct allocation-free 256÷128 division (Knuth D) isn't
-// worth the complexity here yet. TODO(perf): revisit if Div shows up hot.
+// (Binary long division, not Knuth Algorithm D: it's O(256) iterations vs
+// Knuth's O(limbs²), but Div is a rare path — mid/average prices, not the
+// matching hot loop — and it's far easier to prove correct. Revisit with Knuth
+// D only if Div ever shows up hot.)
 func (d Decimal) Div(e Decimal) Decimal {
 	if e.IsZero() {
 		panic("decimal: division by zero")
 	}
-	n := new(big.Int).Mul(d.toBig(), scaleBig)
-	n.Quo(n, e.toBig()) // truncate toward zero
-	return fromBig(n)
+	amhi, amlo, aneg := absMag(d)
+	bmhi, bmlo, bneg := absMag(e)
+	// Numerator = |d| × scale (scale fits in 64 bits, so bhi=0).
+	n0, n1, n2, n3 := mul128to256(amhi, amlo, 0, scaleU)
+	qhi, qlo, ok := div256by128(n0, n1, n2, n3, bmhi, bmlo)
+	if !ok {
+		panic("decimal: value overflows 128-bit range")
+	}
+	return fromMag(qhi, qlo, aneg != bneg)
 }
 
 // MulFloat scales d by a float64 factor (doubly lossy: d→float64 then the
@@ -401,6 +409,44 @@ func mul128to256(ahi, alo, bhi, blo uint64) (p0, p1, p2, p3 uint64) {
 	// p3 = hhHi + carry2 (cannot overflow: max product fits 256 bits)
 	p3 = hhHi + carry2
 	return
+}
+
+// ge128 reports whether the 128-bit unsigned (ahi:alo) >= (bhi:blo).
+func ge128(ahi, alo, bhi, blo uint64) bool {
+	if ahi != bhi {
+		return ahi > bhi
+	}
+	return alo >= blo
+}
+
+// div256by128 divides a 256-bit value (limbs n0..n3, n0 least significant) by a
+// 128-bit divisor (dhi:dlo, must be non-zero), via binary long division. It
+// returns the low 128 bits of the quotient (truncated toward zero) and ok=false
+// if the quotient exceeds 128 bits. The running remainder R is kept < divisor,
+// so it fits in 128 bits; the bit shifted out of R on each step is tracked
+// separately (carry) — when set, the true remainder is ≥ 2^128 > divisor, and
+// the 128-bit wrapping subtract of the divisor is exact because the borrow it
+// produces cancels that 2^128.
+func div256by128(n0, n1, n2, n3, dhi, dlo uint64) (qhi, qlo uint64, ok bool) {
+	n := [4]uint64{n0, n1, n2, n3}
+	var q [4]uint64
+	var rhi, rlo uint64
+	for i := 255; i >= 0; i-- {
+		carry := rhi >> 63 // bit shifting out of the 128-bit remainder
+		rhi = (rhi << 1) | (rlo >> 63)
+		rlo <<= 1
+		rlo |= (n[i>>6] >> uint(i&63)) & 1 // bring down bit i of the numerator
+		if carry == 1 || ge128(rhi, rlo, dhi, dlo) {
+			lo, borrow := bits.Sub64(rlo, dlo, 0)
+			rhi, _ = bits.Sub64(rhi, dhi, borrow)
+			rlo = lo
+			q[i>>6] |= uint64(1) << uint(i&63)
+		}
+	}
+	if q[2] != 0 || q[3] != 0 { // quotient exceeds 128 bits
+		return 0, 0, false
+	}
+	return q[1], q[0], true
 }
 
 // div256by64 divides a 256-bit value (limbs n0..n3, n0 least significant) by a
