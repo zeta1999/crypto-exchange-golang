@@ -114,13 +114,66 @@ func levelsToEntries(levels []orderbook.Level, limit int) []priceBookEntry {
 	return out
 }
 
-// productResponse is the minimal GET .../products/{product_id} shape.
+// productResponse is the GET .../products[/{product_id}] shape. It carries the
+// increment and min-size fields CCXT's parseMarket reads to populate amount /
+// price precision and order limits; trading_disabled drives market['active'].
 type productResponse struct {
-	ProductID string `json:"product_id"`
-	Price     string `json:"price"`
-	Status    string `json:"status"`
-	QuoteCur  string `json:"quote_currency_id"`
-	BaseCur   string `json:"base_currency_id"`
+	ProductID       string `json:"product_id"`
+	Price           string `json:"price"`
+	Status          string `json:"status"`
+	TradingDisabled bool   `json:"trading_disabled"`
+	QuoteCur        string `json:"quote_currency_id"`
+	BaseCur         string `json:"base_currency_id"`
+	BaseIncrement   string `json:"base_increment"`
+	QuoteIncrement  string `json:"quote_increment"`
+	BaseMinSize     string `json:"base_min_size"`
+	QuoteMinSize    string `json:"quote_min_size"`
+}
+
+// stepStr renders the smallest representable increment for a fractional
+// precision, e.g. 8 -> "0.00000001". Used to advertise base/quote increments.
+func stepStr(prec int) string {
+	if prec <= 0 {
+		return "1"
+	}
+	b := make([]byte, prec+2)
+	b[0], b[1] = '0', '.'
+	for i := 2; i <= prec; i++ {
+		b[i] = '0'
+	}
+	b[prec+1] = '1'
+	return string(b)
+}
+
+// productsListResponse mirrors GET /api/v3/brokerage/products — the market
+// discovery document a stock client (CCXT) reads in loadMarkets() before
+// placing any order.
+type productsListResponse struct {
+	Products    []productResponse `json:"products"`
+	NumProducts int               `json:"num_products"`
+}
+
+// handleProducts: GET /api/v3/brokerage/products (public). Lists every
+// configured product so a client can discover the tradable markets.
+func (s *Server) handleProducts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, errInvalidArgument("method not allowed"))
+		return
+	}
+	ids := s.products.List()
+	out := make([]productResponse, 0, len(ids))
+	for _, productID := range ids {
+		engSym, ok := s.products.Resolve(productID)
+		if !ok {
+			continue
+		}
+		price := "0"
+		if snap, err := s.engine.Snapshot(engSym); err == nil {
+			price = tickerPrice(snap).StringPrec(pricePrec)
+		}
+		out = append(out, newProductResponse(productID, price))
+	}
+	writeJSON(w, productsListResponse{Products: out, NumProducts: len(out)})
 }
 
 // handleProduct: GET /api/v3/brokerage/products/{product_id} (public). Uses the
@@ -145,14 +198,26 @@ func (s *Server) handleProduct(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errInvalidProduct(productID))
 		return
 	}
+	writeJSON(w, newProductResponse(productID, tickerPrice(snap).StringPrec(pricePrec)))
+}
+
+// newProductResponse builds the public product document for productID at the
+// given price string, advertising the uniform base/quote increments (and a
+// permissive min size) so a stock client can derive precision and limits.
+func newProductResponse(productID, price string) productResponse {
 	base, quote := splitProduct(productID)
-	writeJSON(w, productResponse{
-		ProductID: productID,
-		Price:     tickerPrice(snap).StringPrec(pricePrec),
-		Status:    "online",
-		QuoteCur:  quote,
-		BaseCur:   base,
-	})
+	return productResponse{
+		ProductID:       productID,
+		Price:           price,
+		Status:          "online",
+		TradingDisabled: false,
+		QuoteCur:        quote,
+		BaseCur:         base,
+		BaseIncrement:   stepStr(sizePrec),
+		QuoteIncrement:  stepStr(pricePrec),
+		BaseMinSize:     stepStr(sizePrec),
+		QuoteMinSize:    "0",
+	}
 }
 
 // splitProduct splits "BTC-USD" into ("BTC","USD"); a product without a hyphen

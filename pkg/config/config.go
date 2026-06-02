@@ -130,7 +130,7 @@ type Emulator struct {
 // deterministically and offline. Used when Venue == "replay".
 type EmulatorReplay struct {
 	File  string  `yaml:"file"`  // recorded trace path (required for venue=replay)
-	Speed float64 `yaml:"speed"` // playback multiplier (reserved; current replay is fast-as-possible)
+	Speed float64 `yaml:"speed"` // playback multiplier: <=0 = as-fast-as-possible (deterministic); 1.0 = real time; 10.0 = 10x
 }
 
 // EmulatorScenario configures the scripted test-bed timeline (PLAN §5 Phase 7).

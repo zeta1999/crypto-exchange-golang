@@ -110,6 +110,7 @@ func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Regis
 	// Public (unsigned) endpoints.
 	s.mux.HandleFunc("/api/v3/ping", s.handlePing)
 	s.mux.HandleFunc("/api/v3/time", s.handleTime)
+	s.mux.HandleFunc("/api/v3/exchangeInfo", s.handleExchangeInfo)
 	s.mux.HandleFunc("/api/v3/depth", s.handleDepth)
 	s.mux.HandleFunc("/api/v3/ticker/price", s.handleTickerPrice)
 

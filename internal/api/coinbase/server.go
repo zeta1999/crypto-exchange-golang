@@ -123,6 +123,7 @@ func New(engine Engine, products *Products, auth *Authenticator, registry *Regis
 	// Public (unsigned) endpoints.
 	s.mux.HandleFunc("/api/v3/brokerage/time", s.handleTime)
 	s.mux.HandleFunc("/api/v3/brokerage/product_book", s.handleProductBook)
+	s.mux.HandleFunc("/api/v3/brokerage/products", s.handleProducts)
 	s.mux.HandleFunc("/api/v3/brokerage/products/", s.handleProduct)
 
 	// SIGNED endpoints.

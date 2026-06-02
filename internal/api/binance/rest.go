@@ -36,6 +36,112 @@ func (s *Server) handleTime(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]int64{"serverTime": s.now().UnixMilli()})
 }
 
+// exchangeInfoResponse mirrors GET /api/v3/exchangeInfo. It is the market
+// discovery document a stock client (CCXT, python-binance) reads in
+// loadMarkets() before placing any order. We expose the configured symbols
+// with uniform precision filters derived from qtyPrec/pricePrec.
+type exchangeInfoResponse struct {
+	Timezone        string        `json:"timezone"`
+	ServerTime      int64         `json:"serverTime"`
+	RateLimits      []interface{} `json:"rateLimits"`
+	ExchangeFilters []interface{} `json:"exchangeFilters"`
+	Symbols         []symbolInfo  `json:"symbols"`
+}
+
+type symbolInfo struct {
+	Symbol                 string        `json:"symbol"`
+	Status                 string        `json:"status"`
+	BaseAsset              string        `json:"baseAsset"`
+	BaseAssetPrecision     int           `json:"baseAssetPrecision"`
+	QuoteAsset             string        `json:"quoteAsset"`
+	QuotePrecision         int           `json:"quotePrecision"`
+	QuoteAssetPrecision    int           `json:"quoteAssetPrecision"`
+	OrderTypes             []string      `json:"orderTypes"`
+	IsSpotTradingAllowed   bool          `json:"isSpotTradingAllowed"`
+	IsMarginTradingAllowed bool          `json:"isMarginTradingAllowed"`
+	Filters                []interface{} `json:"filters"`
+	Permissions            []string      `json:"permissions"`
+}
+
+// stepStr renders the smallest representable increment for a given fractional
+// precision, e.g. prec 8 -> "0.00000001", prec 0 -> "1".
+func stepStr(prec int) string {
+	if prec <= 0 {
+		return "1"
+	}
+	b := make([]byte, prec+2)
+	b[0] = '0'
+	b[1] = '.'
+	for i := 2; i < prec+1; i++ {
+		b[i] = '0'
+	}
+	b[prec+1] = '1'
+	return string(b)
+}
+
+// handleExchangeInfo: GET /api/v3/exchangeInfo[?symbol=] (public). Returns all
+// configured markets, or the single requested one (-1121 if unknown).
+func (s *Server) handleExchangeInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, errIllegalParam("method"))
+		return
+	}
+	want := r.URL.Query().Get("symbol")
+	if want != "" {
+		if _, ok := s.symbols.ToEngine(want); !ok {
+			writeError(w, errInvalidSymbol())
+			return
+		}
+	}
+	priceStep := stepStr(pricePrec)
+	qtyStep := stepStr(qtyPrec)
+	syms := make([]symbolInfo, 0)
+	for _, p := range s.symbols.Pairs() {
+		if want != "" && p.Binance != want {
+			continue
+		}
+		// base/quote come from the engine instrument ("BTC-USD" → BTC/USD), so a
+		// client's unified symbol is "BTC/USD" even though the wire id is the
+		// concatenated "BTCUSDT". This is intentional: the engine is USD-quoted.
+		base, quote := splitEngineSymbol(p.Engine)
+		syms = append(syms, symbolInfo{
+			Symbol:               p.Binance,
+			Status:               "TRADING",
+			BaseAsset:            base,
+			BaseAssetPrecision:   qtyPrec,
+			QuoteAsset:           quote,
+			QuotePrecision:       pricePrec,
+			QuoteAssetPrecision:  pricePrec,
+			OrderTypes:           []string{"LIMIT", "MARKET"},
+			IsSpotTradingAllowed: true,
+			Filters: []interface{}{
+				map[string]string{"filterType": "PRICE_FILTER", "minPrice": priceStep, "maxPrice": "1000000000", "tickSize": priceStep},
+				map[string]string{"filterType": "LOT_SIZE", "minQty": qtyStep, "maxQty": "1000000000", "stepSize": qtyStep},
+				map[string]string{"filterType": "NOTIONAL", "minNotional": "0", "applyMinToMarket": "false"},
+			},
+			Permissions: []string{"SPOT"},
+		})
+	}
+	writeJSON(w, exchangeInfoResponse{
+		Timezone:        "UTC",
+		ServerTime:      s.now().UnixMilli(),
+		RateLimits:      []interface{}{},
+		ExchangeFilters: []interface{}{},
+		Symbols:         syms,
+	})
+}
+
+// splitEngineSymbol splits "BTC-USD" into ("BTC","USD"). If there is no hyphen
+// the whole string is treated as the base with an empty quote.
+func splitEngineSymbol(eng string) (base, quote string) {
+	for i := 0; i < len(eng); i++ {
+		if eng[i] == '-' {
+			return eng[:i], eng[i+1:]
+		}
+	}
+	return eng, ""
+}
+
 // depthResponse mirrors GET /api/v3/depth. bids/asks are [price, qty] string
 // pairs.
 type depthResponse struct {

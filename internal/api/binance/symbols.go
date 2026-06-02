@@ -75,3 +75,15 @@ func (m *SymbolMap) BinanceSymbols() []string {
 	copy(out, m.binanceList)
 	return out
 }
+
+// Pairs returns the configured (Binance, engine) symbol pairs in registration
+// order. Used by exchangeInfo to enumerate markets for client loadMarkets().
+func (m *SymbolMap) Pairs() []SymbolPair {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]SymbolPair, 0, len(m.binanceList))
+	for _, b := range m.binanceList {
+		out = append(out, SymbolPair{Binance: b, Engine: m.toEngine[b]})
+	}
+	return out
+}

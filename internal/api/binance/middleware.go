@@ -121,6 +121,8 @@ func endpointLabel(path string) string {
 		return "/api/v3/ping"
 	case path == "/api/v3/time":
 		return "/api/v3/time"
+	case path == "/api/v3/exchangeInfo":
+		return "/api/v3/exchangeInfo"
 	case path == "/api/v3/userDataStream":
 		return "/api/v3/userDataStream"
 	case path == "/stream":

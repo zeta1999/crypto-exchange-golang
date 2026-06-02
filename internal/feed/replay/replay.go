@@ -2,10 +2,11 @@
 // Recorder that persists a live feed to disk.
 //
 // The on-disk format is JSON Lines: one feed.Event per line, in arrival
-// order. Phase 1 replay is order-only (no wall-clock pacing); accelerated
-// and real-time playback land in later phases. Reading a recorded file back
-// reproduces the exact same Event sequence, which is what the deterministic
-// tests rely on.
+// order. By default replay is order-only (no wall-clock pacing), which is what
+// the deterministic tests rely on; WithSpeed(>0) paces playback by the
+// recorded inter-event timestamps (1.0 = real time, 10.0 = 10x). Pacing changes
+// only timing, never event order or content, so reading a recorded file back
+// always reproduces the exact same Event sequence.
 package replay
 
 import (
@@ -16,6 +17,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
 )
@@ -28,19 +30,53 @@ const maxLineBytes = 4 << 20
 // Source replays events from a JSONL file (or any io.Reader via NewReader).
 type Source struct {
 	*feed.StatusTracker
-	path string
-	r    io.Reader
+	path  string
+	r     io.Reader
+	speed float64 // playback multiplier; <=0 = as-fast-as-possible (no pacing)
+}
+
+// Option configures a replay Source.
+type Option func(*Source)
+
+// WithSpeed sets the playback-speed multiplier. <=0 (the default) replays as
+// fast as possible — order-only, no pacing, which the deterministic tests rely
+// on. 1.0 reproduces the recorded inter-event wall-clock gaps; 10.0 plays 10x
+// faster. Pacing affects only timing, never event order or content.
+func WithSpeed(speed float64) Option {
+	return func(s *Source) { s.speed = speed }
 }
 
 // New returns a Source that reads events from the file at path.
-func New(path string) *Source {
-	return &Source{StatusTracker: feed.NewStatusTracker("replay"), path: path}
+func New(path string, opts ...Option) *Source {
+	s := &Source{StatusTracker: feed.NewStatusTracker("replay"), path: path}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // NewReader returns a Source that reads events from r. Useful for tests and
 // in-memory fixtures; r is consumed once.
-func NewReader(r io.Reader) *Source {
-	return &Source{StatusTracker: feed.NewStatusTracker("replay"), r: r}
+func NewReader(r io.Reader, opts ...Option) *Source {
+	s := &Source{StatusTracker: feed.NewStatusTracker("replay"), r: r}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
+
+// eventTime returns the recorded timestamp carried by an event's payload, or
+// the zero time if none is present (such an event is emitted without delay).
+func eventTime(ev feed.Event) time.Time {
+	switch {
+	case ev.Book != nil:
+		return ev.Book.Timestamp
+	case ev.Trade != nil:
+		return ev.Trade.Timestamp
+	case ev.Ticker != nil:
+		return ev.Ticker.Timestamp
+	}
+	return time.Time{}
 }
 
 func (s *Source) Name() string { return "replay" }
@@ -70,6 +106,10 @@ func (s *Source) Start(ctx context.Context) (<-chan feed.Event, error) {
 
 		sc := bufio.NewScanner(r)
 		sc.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
+		// Pacing state: anchor the first recorded timestamp to the wall clock at
+		// the moment we start emitting, then release each event when its recorded
+		// offset (scaled by 1/speed) has elapsed. Only used when speed > 0.
+		var firstTS, wallStart time.Time
 		for sc.Scan() {
 			if ctx.Err() != nil {
 				s.SetState("closed")
@@ -83,6 +123,26 @@ func (s *Source) Start(ctx context.Context) (<-chan feed.Event, error) {
 			if err := json.Unmarshal(line, &ev); err != nil {
 				s.RecordError()
 				continue
+			}
+			if s.speed > 0 {
+				if ts := eventTime(ev); !ts.IsZero() {
+					if firstTS.IsZero() {
+						firstTS, wallStart = ts, time.Now()
+					}
+					// Target wall time for this event; a non-monotonic or earlier
+					// timestamp yields a past target → no sleep.
+					target := wallStart.Add(time.Duration(float64(ts.Sub(firstTS)) / s.speed))
+					if d := time.Until(target); d > 0 {
+						t := time.NewTimer(d)
+						select {
+						case <-t.C:
+						case <-ctx.Done():
+							t.Stop()
+							s.SetState("closed")
+							return
+						}
+					}
+				}
 			}
 			s.RecordUpdate(len(line), 0)
 			select {

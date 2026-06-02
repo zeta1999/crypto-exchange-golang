@@ -78,7 +78,9 @@ func newFeedSource(cfg config.Emulator) (feed.Source, error) {
 		if cfg.Replay.File == "" {
 			return nil, fmt.Errorf("emulator venue=replay requires replay.file")
 		}
-		return replay.New(cfg.Replay.File), nil
+		// speed<=0 = as-fast-as-possible (deterministic); >0 paces by the
+		// recorded inter-event timestamps (1.0 = real time).
+		return replay.New(cfg.Replay.File, replay.WithSpeed(cfg.Replay.Speed)), nil
 	default:
 		return nil, fmt.Errorf("unknown emulator venue %q (want coinbase|binance|replay)", cfg.Venue)
 	}
