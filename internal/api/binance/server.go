@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
+	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
@@ -31,6 +32,9 @@ type Server struct {
 	balances    []Balance
 	broadcaster *Broadcaster
 	listenKeys  *listenKeyManager
+	limiter     *ratelimit.KeyedLimiter
+	metrics     *Metrics
+	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
 }
 
 // Balance is a Binance account balance entry. The engine has no ledger, so the
@@ -96,11 +100,12 @@ func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Regis
 	s.mux.HandleFunc("/ws/", s.handleRawStream)
 	s.mux.HandleFunc("/stream", s.handleCombinedStream)
 
+	s.handler = s.middleware(s.mux)
 	return s
 }
 
-// Handler exposes the mux for httptest servers.
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler exposes the (rate-limited, metered) handler for httptest servers.
+func (s *Server) Handler() http.Handler { return s.handler }
 
 // AttachHooks registers the edge's order-book hooks. TWO hooks are registered,
 // and ORDER MATTERS: hooks fire in registration order (see orderbook.fire), so
@@ -155,7 +160,7 @@ func isEdgeOrder(id string) bool { return strings.HasPrefix(id, enginePrefix) }
 // ListenAndServe runs the edge with graceful shutdown, mirroring httpserver. It
 // also starts the WebSocket @depth push ticker on ctx.
 func ListenAndServe(ctx context.Context, addr string, srv *Server, certFile, keyFile string) error {
-	server := &http.Server{Addr: addr, Handler: srv.mux}
+	server := &http.Server{Addr: addr, Handler: srv.handler}
 	go srv.Start(ctx) // periodic @depth20 broadcast loop
 	go func() {
 		<-ctx.Done()

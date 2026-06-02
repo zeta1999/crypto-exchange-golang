@@ -33,6 +33,7 @@ const (
 	errOrderNotFound     = "UNKNOWN_ORDER"
 	errInvalidOrderType  = "INVALID_ORDER_TYPE"
 	errInvalidSideString = "INVALID_SIDE"
+	errRateLimited       = "rate_limit_exceeded"
 )
 
 func errUnauthorizedf(msg string) *apiError {
@@ -49,4 +50,9 @@ func errInvalidProduct(productID string) *apiError {
 
 func errInternalf(msg string) *apiError {
 	return &apiError{Err: errInternal, Msg: msg, status: http.StatusInternalServerError}
+}
+
+// errRateLimitedf is the Coinbase rate-limit error with HTTP 429.
+func errRateLimitedf() *apiError {
+	return &apiError{Err: errRateLimited, Msg: "rate limit exceeded", status: http.StatusTooManyRequests}
 }

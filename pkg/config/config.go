@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -48,6 +50,15 @@ type Config struct {
 	Storage     Storage      `yaml:"storage"`
 	Emulator    Emulator     `yaml:"emulator"`
 	API         APIConfig    `yaml:"api"`
+	Metrics     Metrics      `yaml:"metrics"`
+}
+
+// Metrics configures the Prometheus-text metrics endpoint. When Enabled, a
+// dedicated unauthenticated HTTP listener serves /metrics on Listen (public, as
+// is conventional for a scrape endpoint). Disabled by default (non-breaking).
+type Metrics struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
 }
 
 // APIConfig groups optional third-party-compatible API edges.
@@ -61,11 +72,13 @@ type APIConfig struct {
 // credentials a stock Binance client must present (HMAC-SHA256 signing).
 // Symbols maps Binance concatenated symbols to engine instruments.
 type BinanceConfig struct {
-	Enabled bool         `yaml:"enabled"`
-	Listen  string       `yaml:"listen"`
-	APIKey  string       `yaml:"api_key"`
-	Secret  string       `yaml:"secret"`
-	Symbols []SymbolPair `yaml:"symbols"`
+	Enabled    bool         `yaml:"enabled"`
+	Listen     string       `yaml:"listen"`
+	APIKey     string       `yaml:"api_key"`
+	Secret     string       `yaml:"secret"`
+	Symbols    []SymbolPair `yaml:"symbols"`
+	RatePerSec float64      `yaml:"rate_per_sec"` // token-bucket refill; <=0 disables
+	Burst      int          `yaml:"burst"`        // bucket capacity
 }
 
 // SymbolPair maps a Binance symbol ("BTCUSDT") to an engine instrument
@@ -88,6 +101,8 @@ type CoinbaseConfig struct {
 	Secret     string   `yaml:"secret"`
 	Passphrase string   `yaml:"passphrase"`
 	Products   []string `yaml:"products"`
+	RatePerSec float64  `yaml:"rate_per_sec"` // token-bucket refill; <=0 disables
+	Burst      int      `yaml:"burst"`        // bucket capacity
 }
 
 // Emulator configures live-venue mirroring (feed → reference book → seeded
@@ -176,4 +191,156 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	return &cfg, nil
+}
+
+// Validate checks the configuration for internal consistency and reports an
+// aggregated error listing every problem found (or nil when valid). It is
+// intended to be called right after Load so the process fails fast with a
+// helpful message instead of misbehaving at runtime.
+func (c *Config) Validate() error {
+	var errs []string
+	add := func(format string, args ...interface{}) {
+		errs = append(errs, fmt.Sprintf(format, args...))
+	}
+
+	// Instruments: at least one, each with a non-empty symbol. Build the engine
+	// symbol set used by the edge/emulator subset checks below.
+	engine := make(map[string]bool, len(c.Instruments))
+	if len(c.Instruments) == 0 {
+		add("instruments: at least one instrument is required")
+	}
+	for i, inst := range c.Instruments {
+		if strings.TrimSpace(inst.Symbol) == "" {
+			add("instruments[%d]: symbol must not be empty", i)
+			continue
+		}
+		engine[inst.Symbol] = true
+	}
+
+	// Network listen addresses.
+	if strings.TrimSpace(c.Network.ListenGRPC) == "" {
+		add("network.listen_grpc must not be empty")
+	}
+	if strings.TrimSpace(c.Network.ListenHTTP) == "" {
+		add("network.listen_http must not be empty")
+	}
+	if strings.TrimSpace(c.Network.ListenWS) == "" {
+		add("network.listen_ws must not be empty")
+	}
+
+	c.validateEmulator(engine, add)
+	c.validateAPI(engine, add)
+	c.validateMetrics(add)
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.New("invalid config:\n  - " + strings.Join(errs, "\n  - "))
+}
+
+func (c *Config) validateEmulator(engine map[string]bool, add func(string, ...interface{})) {
+	em := c.Emulator
+	if !em.Enabled {
+		return
+	}
+	switch em.Venue {
+	case "coinbase", "binance":
+	default:
+		add("emulator.venue %q is unknown (want coinbase|binance)", em.Venue)
+	}
+	if len(em.Instruments) == 0 {
+		add("emulator.instruments must not be empty when the emulator is enabled")
+	}
+	for _, sym := range em.Instruments {
+		if !engine[sym] {
+			add("emulator.instruments: %q is not a configured engine instrument", sym)
+		}
+	}
+	if em.Reference.DepthLevels < 0 {
+		add("emulator.reference.depth_levels must be >= 0")
+	}
+	if em.Reference.RefreshMs < 0 {
+		add("emulator.reference.refresh_ms must be >= 0")
+	}
+	if em.RTR.TauMs < 0 {
+		add("emulator.rtr.tau_ms must be >= 0")
+	}
+	if em.Latency.FeedToBookMs < 0 || em.Latency.OrderAckMs < 0 ||
+		em.Latency.FillReportMs < 0 || em.Latency.JitterMs < 0 {
+		add("emulator.latency.* must be >= 0")
+	}
+	tx := em.Toxicity
+	if tx.Scale < 0 {
+		add("emulator.toxicity.scale must be >= 0")
+	}
+	if tx.KyleWeight < 0 || tx.VPINWeight < 0 {
+		add("emulator.toxicity.{kyle_weight,vpin_weight} must be >= 0")
+	}
+}
+
+func (c *Config) validateAPI(engine map[string]bool, add func(string, ...interface{})) {
+	if b := c.API.Binance; b.Enabled {
+		if strings.TrimSpace(b.Listen) == "" {
+			add("api.binance.listen must not be empty when enabled")
+		}
+		if len(b.Symbols) == 0 {
+			add("api.binance.symbols must map at least one symbol when enabled")
+		}
+		mapped := 0
+		for _, sp := range b.Symbols {
+			if sp.Binance == "" || sp.Engine == "" {
+				add("api.binance.symbols: each entry needs both binance and engine")
+				continue
+			}
+			if !engine[sp.Engine] {
+				add("api.binance.symbols: engine %q is not a configured instrument", sp.Engine)
+				continue
+			}
+			mapped++
+		}
+		if len(b.Symbols) > 0 && mapped == 0 {
+			add("api.binance.symbols: no entry maps to a configured engine instrument")
+		}
+		if b.RatePerSec < 0 {
+			add("api.binance.rate_per_sec must be >= 0")
+		}
+		if b.Burst < 0 {
+			add("api.binance.burst must be >= 0")
+		}
+	}
+	if cb := c.API.Coinbase; cb.Enabled {
+		if strings.TrimSpace(cb.Listen) == "" {
+			add("api.coinbase.listen must not be empty when enabled")
+		}
+		if len(cb.Products) == 0 {
+			add("api.coinbase.products must list at least one product when enabled")
+		}
+		mapped := 0
+		for _, p := range cb.Products {
+			if p == "" {
+				add("api.coinbase.products: product id must not be empty")
+				continue
+			}
+			if !engine[p] {
+				add("api.coinbase.products: %q is not a configured engine instrument", p)
+				continue
+			}
+			mapped++
+		}
+		if len(cb.Products) > 0 && mapped == 0 {
+			add("api.coinbase.products: no product maps to a configured engine instrument")
+		}
+		if cb.RatePerSec < 0 {
+			add("api.coinbase.rate_per_sec must be >= 0")
+		}
+		if cb.Burst < 0 {
+			add("api.coinbase.burst must be >= 0")
+		}
+	}
+}
+
+func (c *Config) validateMetrics(add func(string, ...interface{})) {
+	if c.Metrics.Enabled && strings.TrimSpace(c.Metrics.Listen) == "" {
+		add("metrics.listen must not be empty when metrics are enabled")
+	}
 }

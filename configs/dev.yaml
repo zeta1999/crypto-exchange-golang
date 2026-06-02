@@ -31,6 +31,8 @@ api:
     listen: ":8082"
     api_key: ""                # credential the client sends in X-MBX-APIKEY
     secret: ""                 # HMAC-SHA256 signing secret
+    rate_per_sec: 20           # token-bucket refill per API-key/IP; <=0 disables
+    burst: 40                  # bucket capacity (max instantaneous burst)
     symbols:                   # Binance concatenated symbol -> engine instrument
       - binance: "BTCUSDT"
         engine: "BTC-USD"
@@ -48,9 +50,17 @@ api:
     api_key: ""                # credential the client sends in CB-ACCESS-KEY
     secret: ""                 # HMAC-SHA256 signing secret (base64 or raw)
     passphrase: ""             # optional; enforced only if set
+    rate_per_sec: 20           # token-bucket refill per API-key/IP; <=0 disables
+    burst: 40                  # bucket capacity (max instantaneous burst)
     products:                  # allow-list of product IDs (== engine instruments)
       - "BTC-USD"
       - "ETH-USD"
+# Prometheus-text metrics endpoint. When enabled, a dedicated unauthenticated
+# HTTP listener serves /metrics (conventional for a scrape endpoint). The
+# emulator pipeline and API edges register their counters/gauges here.
+metrics:
+  enabled: true
+  listen: ":9090"              # GET http://localhost:9090/metrics
 # Live-venue emulation: mirror a real exchange's order book into the engine as
 # synthetic liquidity, converging back to the reference after user trades.
 # Set enabled: false to run as a plain matching engine (offline).

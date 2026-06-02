@@ -28,6 +28,7 @@ const (
 	codeIllegalParam     = -1100 // illegal characters / bad parameter
 	codeInvalidTimestamp = -1021 // timestamp outside recvWindow
 	codeInvalidSignature = -1022 // signature for this request is not valid
+	codeTooManyRequests  = -1003 // too many requests; rate limited
 	codeInvalidSymbol    = -1121 // invalid symbol
 	codeUnknownOrder     = -2011 // CANCEL_REJECTED / unknown order
 	codeBadAPIKeyFmt     = -2014 // API-key format invalid
@@ -52,4 +53,9 @@ func errUnknownOrder() *apiError {
 
 func errInternal(msg string) *apiError {
 	return &apiError{Code: codeUnknown, Msg: msg, status: http.StatusBadRequest}
+}
+
+// errTooManyRequests is the Binance rate-limit error (-1003) with HTTP 429.
+func errTooManyRequests() *apiError {
+	return &apiError{Code: codeTooManyRequests, Msg: "Too many requests.", status: http.StatusTooManyRequests}
 }

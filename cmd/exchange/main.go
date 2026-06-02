@@ -16,7 +16,9 @@ import (
 	wsadapter "github.com/zeta1999/crypto-exchange-golang/internal/api/ws"
 	"github.com/zeta1999/crypto-exchange-golang/internal/engine"
 	"github.com/zeta1999/crypto-exchange-golang/internal/margin"
+	"github.com/zeta1999/crypto-exchange-golang/internal/metrics"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
+	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/config"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/wal"
@@ -32,6 +34,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config validation failed: %v", err)
+	}
+
+	// Metrics registry. Always created (cheap); only exposed if cfg.Metrics
+	// is enabled. The emulator + API edges register their instruments on it.
+	reg := metrics.Default()
+	ordersPlaced := reg.NewCounterVec("exchange_orders_placed_total", "Orders placed into the engine by API edge", "edge")
+	tradesTotal := reg.NewCounter("exchange_trades_total", "Trades produced by the matching engine")
+	cancelsTotal := reg.NewCounter("exchange_cancels_total", "Order cancels observed by the matching engine")
 
 	var instruments []string
 	for _, inst := range cfg.Instruments {
@@ -49,6 +61,14 @@ func main() {
 	book.RegisterHook(func(evt string, data interface{}) {
 		if err := walWriter.Append("orderbook."+evt, data); err != nil {
 			log.Printf("wal hook error: %v", err)
+		}
+		// Engine-level metrics: trades produced, cancels observed. Atomic, never
+		// blocks the book.
+		switch evt {
+		case "trade":
+			tradesTotal.Inc()
+		case "cancel":
+			cancelsTotal.Inc()
 		}
 		select {
 		case events <- grpcserver.Event{Name: evt, Data: data}:
@@ -69,7 +89,7 @@ func main() {
 	// Optionally mirror a live venue into the engine (feed → reference →
 	// seeded synthetic liquidity with return-to-reference).
 	if cfg.Emulator.Enabled {
-		seeders, err := startEmulator(ctx, group, cfg.Emulator, eng, book)
+		seeders, err := startEmulator(ctx, group, cfg.Emulator, eng, book, reg)
 		if err != nil {
 			log.Fatalf("start emulator: %v", err)
 		}
@@ -90,7 +110,7 @@ func main() {
 	grpcSrv := grpcserver.New(eng, tokenValidator, events)
 	wsHandler := wsadapter.NewHandler(eng, tokenValidator)
 	uiFS := http.FS(os.DirFS("http/ui"))
-	httpSrv := httpserver.New(eng, tokenValidator, wsHandler, uiFS)
+	httpSrv := httpserver.New(newMeteredEngine(eng, ordersPlaced, "native"), tokenValidator, wsHandler, uiFS)
 
 	group.Go(func() error {
 		log.Printf("gRPC listening on %s", cfg.Network.ListenGRPC)
@@ -128,7 +148,11 @@ func main() {
 		symbolMap := binance.NewSymbolMap(pairs)
 		authn := binance.NewAuthenticator(bcfg.APIKey, bcfg.Secret, nil)
 		registry := binance.NewRegistry(nil)
-		binanceSrv := binance.New(eng, symbolMap, authn, registry)
+		opts := []binance.Option{binance.WithMetrics(binance.NewMetrics(reg))}
+		if bcfg.RatePerSec > 0 {
+			opts = append(opts, binance.WithRateLimiter(ratelimit.NewKeyedLimiter(bcfg.RatePerSec, bcfg.Burst, 0)))
+		}
+		binanceSrv := binance.New(newMeteredEngine(eng, ordersPlaced, "binance"), symbolMap, authn, registry, opts...)
 		binanceSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking
 		group.Go(func() error {
 			log.Printf("Binance REST edge listening on %s", bcfg.Listen)
@@ -146,11 +170,35 @@ func main() {
 		products := coinbase.NewProducts(ccfg.Products)
 		authn := coinbase.NewAuthenticator(ccfg.APIKey, ccfg.Secret, ccfg.Passphrase, nil)
 		registry := coinbase.NewRegistry(nil)
-		coinbaseSrv := coinbase.New(eng, products, authn, registry)
+		opts := []coinbase.Option{coinbase.WithMetrics(coinbase.NewMetrics(reg))}
+		if ccfg.RatePerSec > 0 {
+			opts = append(opts, coinbase.WithRateLimiter(ratelimit.NewKeyedLimiter(ccfg.RatePerSec, ccfg.Burst, 0)))
+		}
+		coinbaseSrv := coinbase.New(newMeteredEngine(eng, ordersPlaced, "coinbase"), products, authn, registry, opts...)
 		coinbaseSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking
 		group.Go(func() error {
 			log.Printf("Coinbase REST edge listening on %s", ccfg.Listen)
 			if err := coinbase.ListenAndServe(ctx, ccfg.Listen, coinbaseSrv, cfg.Network.TLS.CertFile, cfg.Network.TLS.KeyFile); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
+		})
+	}
+
+	// Dedicated, unauthenticated Prometheus metrics listener (conventional for a
+	// scrape endpoint). Disabled unless cfg.Metrics.Enabled.
+	if cfg.Metrics.Enabled {
+		mcfg := cfg.Metrics
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", metrics.Handler(reg))
+		server := &http.Server{Addr: mcfg.Listen, Handler: mux}
+		group.Go(func() error {
+			log.Printf("metrics listening on %s/metrics", mcfg.Listen)
+			go func() {
+				<-ctx.Done()
+				_ = server.Shutdown(context.Background())
+			}()
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return err
 			}
 			return nil

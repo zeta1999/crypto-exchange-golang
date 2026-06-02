@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
+	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
 )
 
 // Engine is the subset of the matching engine the Coinbase edge consumes.
@@ -31,6 +32,9 @@ type Server struct {
 	accounts    []Account
 	broadcaster *Broadcaster
 	tradeSeq    atomic.Int64
+	limiter     *ratelimit.KeyedLimiter
+	metrics     *Metrics
+	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
 }
 
 // nextTradeID synthesizes a monotonic trade_id for a market_trades frame (the
@@ -106,11 +110,12 @@ func New(engine Engine, products *Products, auth *Authenticator, registry *Regis
 	// WebSocket: single message-driven endpoint (client sends subscribe frames).
 	s.mux.HandleFunc("/ws", s.handleWS)
 
+	s.handler = s.middleware(s.mux)
 	return s
 }
 
-// Handler exposes the mux for httptest servers.
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler exposes the (rate-limited, metered) handler for httptest servers.
+func (s *Server) Handler() http.Handler { return s.handler }
 
 // AttachHooks registers the registry's trade/cancel hooks on an order book. A
 // caller that constructs the book wires this once at startup.
@@ -147,7 +152,7 @@ func (s *Server) AttachHooks(book *orderbook.OrderBook) {
 
 // ListenAndServe runs the edge with graceful shutdown, mirroring httpserver.
 func ListenAndServe(ctx context.Context, addr string, srv *Server, certFile, keyFile string) error {
-	server := &http.Server{Addr: addr, Handler: srv.mux}
+	server := &http.Server{Addr: addr, Handler: srv.handler}
 	// Run the level2 refresh ticker for the lifetime of the server.
 	go srv.Start(ctx)
 	go func() {

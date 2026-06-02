@@ -11,12 +11,41 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed/binance"
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed/coinbase"
+	"github.com/zeta1999/crypto-exchange-golang/internal/metrics"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/reference"
 	"github.com/zeta1999/crypto-exchange-golang/internal/toxicity"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/config"
 	"golang.org/x/sync/errgroup"
 )
+
+// emuMetrics groups the emulator-pipeline instruments. Counters are atomic and
+// never block the goroutine that increments them; gauges that reflect live
+// state are registered as GaugeFuncs read at scrape time.
+type emuMetrics struct {
+	feedEvents     *metrics.CounterVec // labels: venue, kind
+	feedConnected  *metrics.Gauge
+	feedErrors     *metrics.Gauge
+	convergePasses *metrics.Counter
+	rtrPasses      *metrics.Counter
+	tapeInjects    *metrics.Counter
+	toxicFires     *metrics.Counter
+}
+
+func newEmuMetrics(reg *metrics.Registry) *emuMetrics {
+	if reg == nil {
+		return nil
+	}
+	return &emuMetrics{
+		feedEvents:     reg.NewCounterVec("emu_feed_events_total", "Venue feed events received by venue and kind", "venue", "kind"),
+		feedConnected:  reg.NewGauge("emu_feed_connected", "1 when the venue feed is connected, else 0"),
+		feedErrors:     reg.NewGauge("emu_feed_errors", "Cumulative venue feed errors/reconnects reported by Source.Status"),
+		convergePasses: reg.NewCounter("emu_converge_passes_total", "Seeder reconcile/converge passes executed"),
+		rtrPasses:      reg.NewCounter("emu_rtr_passes_total", "Return-to-reference convergence steps executed"),
+		tapeInjects:    reg.NewCounter("emu_tape_injects_total", "Tape trades injected into the engine"),
+		toxicFires:     reg.NewCounter("emu_toxicity_fires_total", "Adverse-selection sweeps fired by the toxicity injector"),
+	}
+}
 
 // syntheticExemptMargin delegates to an inner validator for user orders but
 // waves through the emulator's own synthetic liquidity, which mirrors the
@@ -54,7 +83,7 @@ func newFeedSource(venue string, instruments []string) (feed.Source, error) {
 //
 // The emulator instruments must be registered engine symbols (1:1 venue↔engine
 // symbol mapping). Returns the seeders keyed by symbol for the trade hook.
-func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulator, eng *engine.Engine, book *orderbook.OrderBook) (map[string]*emulator.Seeder, error) {
+func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulator, eng *engine.Engine, book *orderbook.OrderBook, reg *metrics.Registry) (map[string]*emulator.Seeder, error) {
 	src, err := newFeedSource(cfg.Venue, cfg.Instruments)
 	if err != nil {
 		return nil, err
@@ -62,6 +91,30 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 	events, err := src.Start(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("start %s feed: %w", cfg.Venue, err)
+	}
+
+	m := newEmuMetrics(reg)
+
+	// Periodic sampler for feed health gauges (Source.Status isn't event-driven).
+	if m != nil {
+		group.Go(func() error {
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-t.C:
+					st := src.Status()
+					if st.State == "connected" {
+						m.feedConnected.Set(1)
+					} else {
+						m.feedConnected.Set(0)
+					}
+					m.feedErrors.Set(float64(st.ErrorCount))
+				}
+			}
+		})
 	}
 
 	refs := reference.NewSet()
@@ -111,6 +164,9 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 	// resting orders in sync) and fed to the optional toxicity injector.
 	tx := cfg.Toxicity
 	inCh := make(map[string]chan feed.Event, len(cfg.Instruments))
+	// injectorModel exposes each instrument's toxicity model (when enabled) to the
+	// metrics samplers for VPIN/lambda gauges. nil entry ⇒ toxicity disabled.
+	injectorModel := make(map[string]*toxicity.Model, len(cfg.Instruments))
 	for _, sym := range cfg.Instruments {
 		ch := make(chan feed.Event, 1024)
 		inCh[sym] = ch
@@ -124,6 +180,7 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 				Buckets: tx.Buckets, Seed: tx.Seed,
 			})
 			injector = emulator.NewToxicInjector(eng, refBook, model, sym, tx.Seed)
+			injectorModel[sym] = model
 		}
 		group.Go(func() error {
 			for {
@@ -147,10 +204,15 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 						}
 						if _, err := tape.Inject(ctx, ev.Trade); err != nil {
 							log.Printf("tape inject error: %v", err)
+						} else if m != nil {
+							m.tapeInjects.Inc()
 						}
 						if injector != nil {
-							if _, err := injector.Observe(ctx, ev.Trade); err != nil {
+							fills, err := injector.Observe(ctx, ev.Trade)
+							if err != nil {
 								log.Printf("toxicity inject error: %v", err)
+							} else if m != nil && len(fills) > 0 {
+								m.toxicFires.Inc()
 							}
 						}
 					}
@@ -179,9 +241,15 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 					if ev.Book != nil {
 						sym = ev.Book.Instrument
 					}
+					if m != nil {
+						m.feedEvents.WithLabelValues(cfg.Venue, "book").Inc()
+					}
 				case feed.EventTrade:
 					if ev.Trade != nil {
 						sym = ev.Trade.Instrument
+					}
+					if m != nil {
+						m.feedEvents.WithLabelValues(cfg.Venue, "trade").Inc()
 					}
 				}
 				if ch := inCh[sym]; ch != nil {
@@ -201,6 +269,26 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 	}
 	tau := time.Duration(cfg.RTR.TauMs) * time.Millisecond
 
+	// Per-instrument live-state gauges (read at scrape time).
+	var (
+		syntheticResting *metrics.GaugeVec
+		bookAnomalies    *metrics.GaugeVec
+		bookCrossings    *metrics.GaugeVec
+		bookStale        *metrics.GaugeVec
+		toxVPIN          *metrics.GaugeVec
+		toxLambda        *metrics.GaugeVec
+	)
+	if m != nil {
+		syntheticResting = reg.NewGaugeVec("emu_synthetic_resting", "Synthetic orders the seeder believes are resting", "instrument")
+		bookAnomalies = reg.NewGaugeVec("emu_reference_anomalies", "Reference-book diffs dropped (no base snapshot)", "instrument")
+		bookCrossings = reg.NewGaugeVec("emu_reference_crossings", "Times the reference book was left crossed", "instrument")
+		bookStale = reg.NewGaugeVec("emu_reference_stale", "1 when the reference book is stale/uninitialized, else 0", "instrument")
+		toxVPIN = reg.NewGaugeVec("emu_toxicity_vpin", "Current VPIN estimate from the toxicity model", "instrument")
+		toxLambda = reg.NewGaugeVec("emu_toxicity_lambda", "Current Kyle lambda estimate from the toxicity model", "instrument")
+	}
+
+	staleAge := time.Duration(cfg.Reference.RefreshMs) * 4 * time.Millisecond
+
 	seeders := make(map[string]*emulator.Seeder, len(cfg.Instruments))
 	for _, sym := range cfg.Instruments {
 		refBook := refs.Ensure(sym, cfg.Venue)
@@ -210,11 +298,50 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 		})
 		seeders[sym] = seeder
 
+		if m != nil {
+			sym := sym
+			seeder := seeder
+			refBook := refBook
+			// A 1s sampler drives the per-instrument gauges from cheap live reads.
+			rg := syntheticResting.WithLabelValues(sym)
+			ab := bookAnomalies.WithLabelValues(sym)
+			cb := bookCrossings.WithLabelValues(sym)
+			sb := bookStale.WithLabelValues(sym)
+			var vg, lg *metrics.Gauge
+			if injectorModel[sym] != nil {
+				vg = toxVPIN.WithLabelValues(sym)
+				lg = toxLambda.WithLabelValues(sym)
+			}
+			group.Go(func() error {
+				t := time.NewTicker(time.Second)
+				defer t.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-t.C:
+						rg.Set(float64(seeder.SyntheticCount()))
+						ab.Set(float64(refBook.Anomalies()))
+						cb.Set(float64(refBook.Crossings()))
+						if refBook.Stale(time.Now(), staleAge) {
+							sb.Set(1)
+						} else {
+							sb.Set(0)
+						}
+						if mdl := injectorModel[sym]; mdl != nil && vg != nil {
+							vg.Set(mdl.VPIN())
+							lg.Set(mdl.Lambda())
+						}
+					}
+				}
+			})
+		}
+
 		if tau > 0 {
 			rtr := emulator.NewRTR(seeder, tau)
-			group.Go(func() error { return runUntilCanceled(rtr.Run(ctx, refresh)) })
+			group.Go(func() error { return runUntilCanceled(runRTR(ctx, rtr, refresh, m)) })
 		} else {
-			group.Go(func() error { return runUntilCanceled(seeder.Run(ctx, refresh)) })
+			group.Go(func() error { return runUntilCanceled(runSeeder(ctx, seeder, refresh, m)) })
 		}
 	}
 
@@ -229,4 +356,47 @@ func runUntilCanceled(err error) error {
 		return nil
 	}
 	return err
+}
+
+// runRTR drives a return-to-reference controller on a fixed tick, counting each
+// convergence step. It mirrors RTR.Run but folds in the metrics increment (and
+// uses the same actual-elapsed-dt semantics). m may be nil.
+func runRTR(ctx context.Context, rtr *emulator.RTR, tick time.Duration, m *emuMetrics) error {
+	t := time.NewTicker(tick)
+	defer t.Stop()
+	last := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case now := <-t.C:
+			dt := now.Sub(last)
+			last = now
+			if _, err := rtr.Step(ctx, dt); err != nil {
+				log.Printf("rtr step error: %v", err)
+			} else if m != nil {
+				m.rtrPasses.Inc()
+				m.convergePasses.Inc()
+			}
+		}
+	}
+}
+
+// runSeeder drives a seeder's exact reconcile on a fixed tick (instant-mirror
+// mode), counting each pass. Mirrors Seeder.Run. m may be nil.
+func runSeeder(ctx context.Context, seeder *emulator.Seeder, tick time.Duration, m *emuMetrics) error {
+	t := time.NewTicker(tick)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			if _, err := seeder.Reconcile(ctx); err != nil {
+				log.Printf("seeder reconcile error: %v", err)
+			} else if m != nil {
+				m.convergePasses.Inc()
+			}
+		}
+	}
 }
