@@ -268,5 +268,103 @@ api:
 - Mainnet custody / real funds.
 - 100% API coverage of either venue.
 
+## 9. Planned: fixed-point decimal arithmetic
+
+> **TODO (foundational).** Replace `float64` prices/quantities with an exact base-10
+> fixed-point `Decimal` so matching is bit-deterministic and venue decimal strings round-trip
+> losslessly. This is a detailed Go design translated from a reference C++ fixed-point type.
+
+### 9.1 Motivation
+Prices and volumes are `float64` throughout (`feed`, `reference`, `orderbook`, `engine`,
+`emulator`). Floats can't represent decimal venue prices exactly (e.g. `0.1`), accumulate
+rounding under add/multiply, and make the `volEps` tolerances in the emulator necessary. The
+feed already preserves the venue's exact strings (`PriceDecimal`/`QuantityDecimal`); an exact
+`Decimal` lets the matching core consume those losslessly and match deterministically.
+
+### 9.2 Type and storage (`pkg/decimal`, no external deps)
+`Decimal` is a base-10 fixed-point number with **18 fractional digits**, stored as a **signed
+128-bit integer of scaled units**: `value = raw / 10^18`.
+
+- `ScaleDigits = 18`; `Scale = 10^18 = 1_000_000_000_000_000_000` — note `10^18 ≈ 1.15e18 < 2^63`,
+  so the *scale itself* fits in `int64`/`uint64`, but a *scaled value* (e.g. `70000.0 → 7e22`)
+  does not — hence 128-bit storage.
+- Go has no native `int128`. Store as a two's-complement 128-bit integer:
+  `type Decimal struct { hi int64; lo uint64 }`. Range ≈ ±1.7e38; with the 10^18 scale the
+  integer part spans ≈ ±1.7e20 — ample for crypto prices and sizes. `Decimal` stays a
+  `comparable` value type (usable directly as a map key — replaces the float-formatted level
+  keys in `reference`/`emulator`).
+
+### 9.3 Construction
+- `FromRaw(hi int64, lo uint64) Decimal` / `(d Decimal) Raw() (int64, uint64)` — direct scaled
+  access (WAL, wire, hashing).
+- `FromInt(n int64) Decimal` → `raw = n * Scale` (128-bit multiply).
+- `FromFloat(f float64) Decimal` → `round(f * Scale)`; **lossy**, ingestion/convenience only.
+- `Parse(s string) (Decimal, error)` — exact, mirroring the reference state machine: optional
+  `+`/`-`; one or more integral digits; optional `.` then up to 18 fractional digits (extra
+  digits truncated, missing digits zero-padded to 18); `raw = integral*Scale + fractional`,
+  negate if signed; error on any malformed input or trailing garbage.
+- `MustParse(s string) Decimal` — panics on error (constants/tests).
+
+### 9.4 Conversion / formatting
+- `Float64() float64` — lossy.
+- `String() string` and `StringPrec(prec int) string` — clamp `prec` to `[0,18]`; split `|raw|`
+  into `integral = |raw|/Scale` and `frac = |raw|%Scale`; render `frac` to 18 digits then
+  trim to `prec` (**truncate**, matching the reference; document the rounding choice); prepend
+  `-` if negative. Default precision 6 for human output, but the matching core should serialize
+  full precision.
+- `MarshalJSON`/`UnmarshalJSON` and `MarshalText`/`UnmarshalText` as the **decimal string**
+  (preserves exactness on the wire; aligns with the feed's `*Decimal` fields and the WAL).
+
+### 9.5 Arithmetic
+- `Add`, `Sub`: 128-bit two's-complement add/sub via `math/bits.Add64`/`Sub64` (carry/borrow);
+  no scale change.
+- `Neg`, `Abs`, `Sign() int`, `IsZero() bool`.
+- `Mul(a, b)`: result `= a*b / Scale`. The full product of two 128-bit values is up to 256-bit,
+  so compute a **128×128→256** product (split into 64-bit limbs with `math/bits.Mul64` +
+  `Add64` accumulation, tracking sign on magnitudes), then divide the 256-bit magnitude by
+  `Scale` (a 64-bit divisor) back to 128-bit; reapply sign.
+- `Div(a, b)`: result `= a*Scale / b`. Numerator `a*Scale` is up to ~188-bit → use a 256-bit
+  intermediate, divide by `b` (128-bit) → 128-bit. **Division by zero panics** (programmer
+  error). Document truncation toward zero.
+- **Overflow policy:** the 256-bit intermediates make mul/div overflow-safe across the full
+  128-bit *input* range; if a *result* exceeds 128 bits, panic with a clear message (don't
+  silently wrap). Document.
+- Convergence/scaling helpers the emulator needs: represent factors like RTR's `alpha` as a
+  `Decimal` and use `Mul`, or add `MulFloat(f float64)` for non-exact scaling at edges.
+
+### 9.6 Comparisons & helpers
+- `Cmp(a, b) int` (−1/0/1): compare `hi` as signed, then `lo` as unsigned. `Eq`/`Lt`/`Lte`/
+  `Gt`/`Gte`. Free functions `Min`, `Max`, `Abs`.
+
+### 9.7 Backends (optional; mirrors the reference Int128 / Wide / Double variants)
+- **Exact (default):** 128-bit storage with 256-bit mul/div intermediates — always
+  overflow-safe (the reference's "Wide" behavior; we do **not** ship the overflow-prone
+  128-bit-only multiply).
+- **Float (optional):** a `float64`-backed type behind the same interface/alias for A/B
+  benchmarking and a deliberately fast/loose mode. Keep callers backend-agnostic via an
+  interface or build-tagged alias so the choice is one line.
+- **Implementation order:** ship a correct-but-simple first cut using `math/big.Int` for the
+  256-bit intermediate in `Mul`/`Div` (allocates), behind the final API; then replace the hot
+  paths with allocation-free 64-bit-limb math (`math/bits`) and benchmark.
+
+### 9.8 Migration (large, cross-cutting — sequence carefully)
+1. Land `pkg/decimal` with full tests (no callers yet).
+2. Convert the matching core: `orderbook.Order.Price/Volume`, `orderbook.Level`, `engine` →
+   `Decimal`. Matching becomes exact ⇒ fully deterministic.
+3. Feed edge: `Parse` the already-exact `PriceDecimal`/`QuantityDecimal` → `Decimal`; keep
+   `float64` only for display/metrics.
+4. `reference.Book`: key levels by `Decimal` (drop the float-formatted key), volumes `Decimal`,
+   re-examine `Crossed`/`Mid`/`Spread`.
+5. `emulator` seeder/RTR: `Decimal` volumes; `volEps` tolerance becomes exact equality (revisit
+   the no-churn check) since fold/convergence are now exact.
+6. WAL/API payloads serialize `Decimal` as strings.
+
+### 9.9 Testing
+- `Parse` ↔ `String` round-trip over random decimals and edge formats.
+- Arithmetic property-checked against a `math/big.Rat` oracle over random inputs.
+- Edges: max/min representable, division-by-zero panic, negatives, 18-digit truncation,
+  result-overflow panic.
+- JSON/WAL round-trip; map-key usage.
+
 See `STATUS.md` for progress, `TODO.md` for the granular checklist, `TESTING.md` for the
 manual test plan, and `ci.sh` for the local CI gate.

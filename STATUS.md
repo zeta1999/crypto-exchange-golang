@@ -50,6 +50,10 @@ _Last updated: 2026-06-02_
   **artificial latency**, **artificial price shift** (manufacture cross-venue dislocations
   to test arbitrage / relative-value models). Phases renumbered 7→8…10→11.
 - 2026-06-02: Project codename **mirage** (README + logo); easily renamed.
+- 2026-06-02: **Market prices & quantities use fixed-point ("fast") decimals**, not float64 —
+  base-10, 18 fractional digits, signed 128-bit scaled storage, 256-bit mul/div intermediates;
+  exact and bit-deterministic. Detailed Go design in PLAN.md §9 (`pkg/decimal`). Confirmed/locked;
+  cross-cutting migration from the current float64 prices/volumes is sequenced in PLAN.md §9.8.
 - 2026-06-02: Coinbase uses the **Advanced Trade** WS protocol (per-channel subscribe
   `{type:subscribe, channel, product_ids}`; book replies on `l2_data` snapshot/update,
   `new_quantity:"0"` = level removal), **not** the legacy Exchange "channels" array the
