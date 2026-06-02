@@ -9,6 +9,33 @@ import (
 	"strings"
 )
 
+// formatBigUnits renders a big.Int amount of base units (e.g. wei, or ERC20
+// smallest units) as a decimal string with dec fractional digits, trailing
+// zeros trimmed. Used where the amount can exceed uint64 (e.g. wei).
+func formatBigUnits(v *big.Int, dec int) string {
+	if dec <= 0 {
+		return v.String()
+	}
+	s := v.String()
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	for len(s) <= dec {
+		s = "0" + s
+	}
+	intPart, fracPart := s[:len(s)-dec], s[len(s)-dec:]
+	fracPart = strings.TrimRight(fracPart, "0")
+	res := intPart
+	if fracPart != "" {
+		res = intPart + "." + fracPart
+	}
+	if neg {
+		res = "-" + res
+	}
+	return res
+}
+
 // --- Stellar StrKey (base32 + CRC16-XModem) ---
 //
 // A StrKey is base32(versionByte || payload || crc16LE). The version byte's

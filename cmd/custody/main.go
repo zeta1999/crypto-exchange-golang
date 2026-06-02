@@ -38,7 +38,7 @@ commands:
   faucet -name <name> [-asset A] [-amount F]   tap the testnet faucet
   balance -name <name> [-watch]         show balances (optionally poll)
 
-chains: xlm (Stellar testnet), sol (Solana devnet)
+chains: xlm (Stellar testnet), sol (Solana devnet), eth (Ethereum Sepolia)
 
 env:
   CUSTODY_PASSPHRASE  (required) unlocks/creates the keystore
@@ -55,6 +55,7 @@ func main() {
 	reg := custody.NewRegistry()
 	reg.Register(custody.NewStellar())
 	reg.Register(custody.NewSolana())
+	reg.Register(custody.NewEVM())
 
 	var err error
 	switch os.Args[1] {
