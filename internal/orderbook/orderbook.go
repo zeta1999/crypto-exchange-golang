@@ -136,6 +136,28 @@ func (b *OrderBook) ExecuteMarketOrder(ord *Order) ([]*Trade, error) {
 	return b.AddLimitOrder(ord)
 }
 
+// ExecuteLimitIOC matches a limit order against resting liquidity up to its
+// price (immediate-or-cancel) and discards any unfilled remainder — it never
+// rests. The match and discard happen under a single lock hold, so (unlike a
+// place-then-cancel sequence) no transient order is ever visible to other
+// actors. Used by the tape replay: a tape print is a taker, not a maker.
+func (b *OrderBook) ExecuteLimitIOC(ord *Order) ([]*Trade, error) {
+	book, ok := b.instruments[ord.Instrument]
+	if !ok {
+		return nil, ErrUnknownInstrument
+	}
+	book.mu.Lock()
+	defer book.mu.Unlock()
+	if ord.Volume.Sign() <= 0 {
+		return nil, nil
+	}
+	trades := book.matchLocked(ord) // matches under the price cap; never enqueues
+	for _, t := range trades {
+		b.fire("trade", t)
+	}
+	return trades, nil
+}
+
 // CancelOrder removes a resting order by identifier if present.
 func (b *OrderBook) CancelOrder(symbol, orderID string) (*Order, error) {
 	book, ok := b.instruments[symbol]

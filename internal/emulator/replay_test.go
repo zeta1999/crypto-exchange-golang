@@ -2,6 +2,7 @@ package emulator
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
@@ -120,6 +121,44 @@ func TestTapeIgnoresOtherInstrumentAndZero(t *testing.T) {
 	}
 	if tr, _ := tape.Inject(context.Background(), tapeTrade("buy", 100, 0)); len(tr) != 0 {
 		t.Error("zero-size trade should be ignored")
+	}
+}
+
+// TestTapeNonFiniteDoesNotPanic: a malformed feed trade (NaN/Inf price, which
+// strconv.ParseFloat yields without error) must be dropped, not panic.
+func TestTapeNonFiniteDoesNotPanic(t *testing.T) {
+	eng := newEngine("BTC-USD")
+	tape := NewTapeReplay(eng, "BTC-USD")
+	for _, bad := range []*feed.Trade{
+		{Instrument: "BTC-USD", Side: "buy", Price: math.NaN(), Quantity: 1, PriceDecimal: "NaN", QuantityDecimal: "1"},
+		{Instrument: "BTC-USD", Side: "sell", Price: math.Inf(1), Quantity: 1},
+		{Instrument: "BTC-USD", Side: "buy", Price: 100, Quantity: math.NaN()},
+		{Instrument: "BTC-USD", Side: "weird", Price: 100, Quantity: 1}, // unknown side
+	} {
+		if tr, err := tape.Inject(context.Background(), bad); err != nil || len(tr) != 0 {
+			t.Errorf("bad trade %+v: trades=%v err=%v (want dropped)", bad, tr, err)
+		}
+	}
+}
+
+// TestTapeIOCLeavesNoRemainder: a tape print larger than available liquidity
+// fills what it can and leaves nothing resting (immediate-or-cancel).
+func TestTapeIOCLeavesNoRemainder(t *testing.T) {
+	eng := newEngine("BTC-USD")
+	if _, _, err := eng.PlaceLimit(context.Background(), userLimit("s1", orderbook.SideSell, 101, 1)); err != nil {
+		t.Fatal(err)
+	}
+	tape := NewTapeReplay(eng, "BTC-USD")
+	trades, err := tape.Inject(context.Background(), tapeTrade("buy", 101, 100)) // far exceeds the 1 available
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trades) != 1 || !trades[0].Volume.Eq(decimal.FromFloat(1)) {
+		t.Fatalf("want one 1-lot fill, got %+v", trades)
+	}
+	snap, _ := eng.Snapshot("BTC-USD")
+	if len(snap.Bids) != 0 || len(snap.Asks) != 0 {
+		t.Errorf("IOC remainder must not rest: %d bids / %d asks", len(snap.Bids), len(snap.Asks))
 	}
 }
 

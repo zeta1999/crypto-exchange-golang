@@ -64,13 +64,18 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 	}
 
 	refs := reference.NewSet()
-	tapes := make(map[string]*emulator.TapeReplay, len(cfg.Instruments))
+
+	// Each instrument's tape runs on its own goroutine, fed by a buffered
+	// channel, so a burst of trade prints can't head-of-line block reference
+	// book updates (which the dispatcher applies inline) or the seeder/RTR.
+	tapeCh := make(map[string]chan feed.Event, len(cfg.Instruments))
 	for _, sym := range cfg.Instruments {
-		tapes[sym] = emulator.NewTapeReplay(eng, sym)
+		ch := make(chan feed.Event, 1024)
+		tapeCh[sym] = ch
+		tape := emulator.NewTapeReplay(eng, sym)
+		group.Go(func() error { tape.Run(ctx, ch); return nil })
 	}
-	// One dispatcher routes the single feed channel: book frames rebuild the
-	// reference book; trade prints are replayed against the engine so resting
-	// (user + synthetic) orders fill in sync with the live tape.
+
 	group.Go(func() error {
 		for {
 			select {
@@ -82,13 +87,16 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 				}
 				switch ev.Kind {
 				case feed.EventBook:
-					refs.Apply(ev)
+					refs.Apply(ev) // fast; rebuilds the reference book inline
 				case feed.EventTrade:
-					if ev.Trade != nil {
-						if tr := tapes[ev.Trade.Instrument]; tr != nil {
-							if _, err := tr.Inject(ctx, ev.Trade); err != nil {
-								log.Printf("tape inject error: %v", err)
-							}
+					if ev.Trade == nil {
+						continue
+					}
+					if ch := tapeCh[ev.Trade.Instrument]; ch != nil {
+						select {
+						case ch <- ev: // hand off to the instrument's tape goroutine
+						default:
+							log.Printf("tape channel full for %s; dropping print", ev.Trade.Instrument)
 						}
 					}
 				}

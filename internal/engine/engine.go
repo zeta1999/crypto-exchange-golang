@@ -52,6 +52,17 @@ func (e *Engine) PlaceMarket(ctx context.Context, ord *orderbook.Order) ([]*orde
 	return e.PlaceLimit(ctx, ord)
 }
 
+// ExecuteIOC matches a marketable limit order immediate-or-cancel (fills up to
+// its price, discards the remainder, never rests). Used by the emulator's tape
+// replay so a tape print fills resting orders without leaving a maker order.
+func (e *Engine) ExecuteIOC(ctx context.Context, ord *orderbook.Order) ([]*orderbook.Trade, error) {
+	if err := e.margin.Validate(ctx, ord); err != nil {
+		return nil, fmt.Errorf("margin validation failed: %w", err)
+	}
+	_ = e.recorder.Append("order.ioc", snapshotOrder(ord))
+	return e.book.ExecuteLimitIOC(ord)
+}
+
 // Snapshot exposes public market data for dashboards.
 func (e *Engine) Snapshot(symbol string) (*orderbook.Snapshot, error) {
 	return e.book.Snapshot(symbol)
