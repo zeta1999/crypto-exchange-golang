@@ -1,0 +1,362 @@
+// Package decimal provides an exact base-10 fixed-point number for market
+// prices and quantities. A Decimal has 18 fractional digits and is stored as
+// a signed 128-bit integer of scaled units (value = raw / 10^18), so decimal
+// venue prices round-trip losslessly and matching is bit-deterministic —
+// unlike float64. See PLAN.md §9.
+//
+// The 128-bit value is held as a two's-complement {hi int64, lo uint64} pair,
+// which keeps Decimal a comparable value type (usable directly as a map key).
+// Add/Sub use math/bits with signed-overflow detection; Mul/Div use big.Int
+// intermediates (a correct first cut — the hot paths can later move to
+// allocation-free limb math without changing this API).
+package decimal
+
+import (
+	"fmt"
+	"math/big"
+	"math/bits"
+	"strings"
+)
+
+// ScaleDigits is the number of fractional decimal digits.
+const ScaleDigits = 18
+
+// scaleU is 10^18, the scale factor. It fits in a uint64 (10^18 ≈ 1.15e18 < 2^63).
+const scaleU uint64 = 1_000_000_000_000_000_000
+
+var (
+	scaleBig = new(big.Int).SetUint64(scaleU)
+	two128   = new(big.Int).Lsh(big.NewInt(1), 128)                                  // 2^128
+	maxPos   = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1)) // 2^127 - 1
+	minNeg   = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127))                // -2^127
+)
+
+// Decimal is an exact base-10 fixed-point number (18 fractional digits).
+// The zero value is 0.
+type Decimal struct {
+	hi int64
+	lo uint64
+}
+
+// Zero is the additive identity.
+var Zero = Decimal{}
+
+// --- construction ---
+
+// FromRaw builds a Decimal from its scaled 128-bit representation.
+func FromRaw(hi int64, lo uint64) Decimal { return Decimal{hi: hi, lo: lo} }
+
+// Raw returns the scaled 128-bit representation (high/low words).
+func (d Decimal) Raw() (hi int64, lo uint64) { return d.hi, d.lo }
+
+// FromInt returns the Decimal value of an integer.
+func FromInt(n int64) Decimal {
+	return fromBig(new(big.Int).Mul(big.NewInt(n), scaleBig))
+}
+
+// FromFloat converts a float64, rounding to the nearest 1e-18. It is lossy
+// (floats can't represent most decimals exactly) and intended for ingestion
+// convenience and edge scaling, not for authoritative price/quantity values —
+// prefer Parse on the venue's decimal string.
+func FromFloat(f float64) Decimal {
+	bf := new(big.Float).SetPrec(200).SetFloat64(f)
+	bf.Mul(bf, new(big.Float).SetInt(scaleBig))
+	// Round half away from zero.
+	if f < 0 {
+		bf.Sub(bf, big.NewFloat(0.5))
+	} else {
+		bf.Add(bf, big.NewFloat(0.5))
+	}
+	raw, _ := bf.Int(nil)
+	return fromBig(raw)
+}
+
+// MustParse is Parse that panics on error; for constants and tests.
+func MustParse(s string) Decimal {
+	d, err := Parse(s)
+	if err != nil {
+		panic(fmt.Sprintf("decimal: MustParse(%q): %v", s, err))
+	}
+	return d
+}
+
+// Parse converts a decimal string ("-123.456", "0.1", "42") exactly. Up to 18
+// fractional digits are kept; extra digits are truncated and missing digits
+// are zero-padded. It errors on malformed input or on overflow of the 128-bit
+// range.
+func Parse(s string) (Decimal, error) {
+	if s == "" {
+		return Decimal{}, fmt.Errorf("decimal: empty string")
+	}
+	neg := false
+	i := 0
+	if s[0] == '+' || s[0] == '-' {
+		neg = s[0] == '-'
+		i++
+	}
+	if i >= len(s) || !isDigit(s[i]) {
+		return Decimal{}, fmt.Errorf("decimal: invalid format %q", s)
+	}
+
+	integral := new(big.Int)
+	for i < len(s) && isDigit(s[i]) {
+		integral.Mul(integral, big.NewInt(10))
+		integral.Add(integral, big.NewInt(int64(s[i]-'0')))
+		i++
+	}
+
+	fractional := new(big.Int)
+	fracDigits := 0
+	if i < len(s) {
+		if s[i] != '.' {
+			return Decimal{}, fmt.Errorf("decimal: invalid format %q", s)
+		}
+		i++
+		for i < len(s) && isDigit(s[i]) {
+			if fracDigits < ScaleDigits {
+				fractional.Mul(fractional, big.NewInt(10))
+				fractional.Add(fractional, big.NewInt(int64(s[i]-'0')))
+				fracDigits++
+			}
+			i++
+		}
+		for fracDigits < ScaleDigits {
+			fractional.Mul(fractional, big.NewInt(10))
+			fracDigits++
+		}
+	}
+	if i != len(s) {
+		return Decimal{}, fmt.Errorf("decimal: invalid format %q", s)
+	}
+
+	raw := new(big.Int).Mul(integral, scaleBig)
+	raw.Add(raw, fractional)
+	if neg {
+		raw.Neg(raw)
+	}
+	d, ok := fromBigChecked(raw)
+	if !ok {
+		return Decimal{}, fmt.Errorf("decimal: %q overflows 128-bit range", s)
+	}
+	return d, nil
+}
+
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
+
+// --- conversion / formatting ---
+
+// Float64 returns the value as a float64 (lossy).
+func (d Decimal) Float64() float64 {
+	f, _ := new(big.Rat).SetFrac(d.toBig(), scaleBig).Float64()
+	return f
+}
+
+// String formats with 6 fractional digits (trailing digits truncated).
+func (d Decimal) String() string { return d.StringPrec(6) }
+
+// StringPrec formats with prec fractional digits (clamped to [0,18]), trimming
+// (not rounding) excess precision.
+func (d Decimal) StringPrec(prec int) string {
+	if prec < 0 {
+		prec = 0
+	}
+	if prec > ScaleDigits {
+		prec = ScaleDigits
+	}
+	neg := d.Sign() < 0
+	abs := new(big.Int).Abs(d.toBig())
+	integral := new(big.Int)
+	frac := new(big.Int)
+	integral.DivMod(abs, scaleBig, frac)
+
+	var b strings.Builder
+	if neg {
+		b.WriteByte('-')
+	}
+	b.WriteString(integral.String())
+	if prec > 0 {
+		// Render the fractional part as exactly 18 zero-padded digits, then trim.
+		fs := frac.String()
+		fs = strings.Repeat("0", ScaleDigits-len(fs)) + fs
+		b.WriteByte('.')
+		b.WriteString(fs[:prec])
+	}
+	return b.String()
+}
+
+// MarshalText renders the full-precision decimal string (18 digits).
+func (d Decimal) MarshalText() ([]byte, error) { return []byte(d.StringPrec(ScaleDigits)), nil }
+
+// UnmarshalText parses a decimal string.
+func (d *Decimal) UnmarshalText(text []byte) error {
+	v, err := Parse(string(text))
+	if err != nil {
+		return err
+	}
+	*d = v
+	return nil
+}
+
+// MarshalJSON encodes as a JSON string to preserve exactness on the wire.
+func (d Decimal) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + d.StringPrec(ScaleDigits) + `"`), nil
+}
+
+// UnmarshalJSON accepts either a JSON string or a bare JSON number.
+func (d *Decimal) UnmarshalJSON(data []byte) error {
+	s := strings.TrimSpace(string(data))
+	s = strings.TrimPrefix(s, `"`)
+	s = strings.TrimSuffix(s, `"`)
+	v, err := Parse(s)
+	if err != nil {
+		return err
+	}
+	*d = v
+	return nil
+}
+
+// --- arithmetic ---
+
+// Add returns d + e. Panics on 128-bit overflow.
+func (d Decimal) Add(e Decimal) Decimal {
+	lo, carry := bits.Add64(d.lo, e.lo, 0)
+	hi := d.hi + e.hi + int64(carry)
+	// Signed overflow: operands share a sign but the result's differs.
+	if (d.hi < 0) == (e.hi < 0) && (hi < 0) != (d.hi < 0) {
+		panic("decimal: Add overflow")
+	}
+	return Decimal{hi: hi, lo: lo}
+}
+
+// Sub returns d - e. Panics on 128-bit overflow.
+func (d Decimal) Sub(e Decimal) Decimal {
+	lo, borrow := bits.Sub64(d.lo, e.lo, 0)
+	hi := d.hi - e.hi - int64(borrow)
+	// Signed overflow: operands differ in sign and the result's sign differs from d's.
+	if (d.hi < 0) != (e.hi < 0) && (hi < 0) != (d.hi < 0) {
+		panic("decimal: Sub overflow")
+	}
+	return Decimal{hi: hi, lo: lo}
+}
+
+// Neg returns -d.
+func (d Decimal) Neg() Decimal { return Zero.Sub(d) }
+
+// Mul returns d * e (= d.raw * e.raw / scale). Panics on overflow.
+func (d Decimal) Mul(e Decimal) Decimal {
+	p := new(big.Int).Mul(d.toBig(), e.toBig())
+	p.Quo(p, scaleBig) // truncate toward zero
+	return fromBig(p)
+}
+
+// Div returns d / e (= d.raw * scale / e.raw). Panics on division by zero or overflow.
+func (d Decimal) Div(e Decimal) Decimal {
+	if e.IsZero() {
+		panic("decimal: division by zero")
+	}
+	n := new(big.Int).Mul(d.toBig(), scaleBig)
+	n.Quo(n, e.toBig()) // truncate toward zero
+	return fromBig(n)
+}
+
+// MulFloat scales d by a float64 factor (lossy). For non-exact edge scaling
+// such as the RTR convergence fraction; not for authoritative values.
+func (d Decimal) MulFloat(f float64) Decimal { return FromFloat(d.Float64() * f) }
+
+// Abs returns |d|.
+func (d Decimal) Abs() Decimal {
+	if d.Sign() < 0 {
+		return d.Neg()
+	}
+	return d
+}
+
+// --- comparison ---
+
+// Sign returns -1, 0, or +1.
+func (d Decimal) Sign() int {
+	if d.hi < 0 {
+		return -1
+	}
+	if d.hi == 0 && d.lo == 0 {
+		return 0
+	}
+	return 1
+}
+
+// IsZero reports whether d == 0.
+func (d Decimal) IsZero() bool { return d.hi == 0 && d.lo == 0 }
+
+// Cmp returns -1, 0, or +1 as d is less than, equal to, or greater than e.
+func (d Decimal) Cmp(e Decimal) int {
+	if d.hi != e.hi {
+		if d.hi < e.hi {
+			return -1
+		}
+		return 1
+	}
+	if d.lo != e.lo {
+		if d.lo < e.lo { // low word is unsigned
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+func (d Decimal) Eq(e Decimal) bool  { return d == e }
+func (d Decimal) Lt(e Decimal) bool  { return d.Cmp(e) < 0 }
+func (d Decimal) Lte(e Decimal) bool { return d.Cmp(e) <= 0 }
+func (d Decimal) Gt(e Decimal) bool  { return d.Cmp(e) > 0 }
+func (d Decimal) Gte(e Decimal) bool { return d.Cmp(e) >= 0 }
+
+// Min returns the smaller of a and b.
+func Min(a, b Decimal) Decimal {
+	if a.Cmp(b) <= 0 {
+		return a
+	}
+	return b
+}
+
+// Max returns the larger of a and b.
+func Max(a, b Decimal) Decimal {
+	if a.Cmp(b) >= 0 {
+		return a
+	}
+	return b
+}
+
+// --- 128-bit <-> big.Int bridging ---
+
+// toBig reconstructs the signed 128-bit value: hi*2^64 + lo.
+func (d Decimal) toBig() *big.Int {
+	b := new(big.Int).SetInt64(d.hi)
+	b.Lsh(b, 64)
+	return b.Add(b, new(big.Int).SetUint64(d.lo))
+}
+
+// fromBig converts a big.Int to a Decimal, panicking if it exceeds the signed
+// 128-bit range.
+func fromBig(b *big.Int) Decimal {
+	d, ok := fromBigChecked(b)
+	if !ok {
+		panic("decimal: value overflows 128-bit range")
+	}
+	return d
+}
+
+// fromBigChecked converts a big.Int, reporting ok=false on 128-bit overflow.
+func fromBigChecked(b *big.Int) (Decimal, bool) {
+	if b.Cmp(maxPos) > 0 || b.Cmp(minNeg) < 0 {
+		return Decimal{}, false
+	}
+	t := b
+	if b.Sign() < 0 {
+		t = new(big.Int).Add(b, two128) // two's-complement representation
+	}
+	// Split into 64-bit words.
+	loMask := new(big.Int).SetUint64(^uint64(0))
+	loB := new(big.Int).And(t, loMask)
+	hiB := new(big.Int).Rsh(t, 64)
+	return Decimal{hi: int64(hiB.Uint64()), lo: loB.Uint64()}, true
+}
