@@ -203,7 +203,11 @@ func TestReconcileToleratesExternallyRemovedOrder(t *testing.T) {
 	}
 
 	// Remove the 99 bid behind the seeder's back.
-	if _, err := eng.CancelOrder(context.Background(), "BTC-USD", s.synthID(orderbook.SideBuy, 99)); err != nil {
+	id99, ok := s.OrderID(orderbook.SideBuy, 99)
+	if !ok {
+		t.Fatal("expected a synthetic order at 99")
+	}
+	if _, err := eng.CancelOrder(context.Background(), "BTC-USD", id99); err != nil {
 		t.Fatalf("out-of-band cancel: %v", err)
 	}
 
@@ -216,7 +220,11 @@ func TestReconcileToleratesExternallyRemovedOrder(t *testing.T) {
 	assertMirrors(t, eng, ref, 0)
 
 	// Clear must also tolerate an already-gone order.
-	if _, err := eng.CancelOrder(context.Background(), "BTC-USD", s.synthID(orderbook.SideBuy, 100)); err != nil {
+	id100, ok := s.OrderID(orderbook.SideBuy, 100)
+	if !ok {
+		t.Fatal("expected a synthetic order at 100")
+	}
+	if _, err := eng.CancelOrder(context.Background(), "BTC-USD", id100); err != nil {
 		t.Fatalf("out-of-band cancel: %v", err)
 	}
 	if err := s.Clear(context.Background()); err != nil {

@@ -72,9 +72,10 @@ type Seeder struct {
 
 	mu     sync.Mutex
 	placed map[string]synthOrder // levelKey -> resting synthetic order
+	nonce  uint64                // generation counter for unique order IDs
 
 	fillMu sync.Mutex
-	fills  map[string]float64 // levelKey -> volume filled since last Converge
+	fills  map[string]float64 // full order ID -> volume filled since last Converge
 }
 
 type synthOrder struct {
@@ -112,13 +113,32 @@ func priceKey(side orderbook.Side, price float64) string {
 
 func (s *Seeder) idPrefix() string { return "synth:" + s.cfg.Instrument + ":" }
 
-func (s *Seeder) synthID(side orderbook.Side, price float64) string {
-	return s.idPrefix() + priceKey(side, price)
+// nextIDLocked mints a fresh, unique engine order ID for a level. The trailing
+// generation counter is what lets fill accounting distinguish a placement from
+// the order it replaced: a fill buffered against an old generation is ignored
+// once the level is re-placed. Caller holds s.mu.
+func (s *Seeder) nextIDLocked(side orderbook.Side, price float64) string {
+	s.nonce++
+	return s.idPrefix() + priceKey(side, price) + "#" + strconv.FormatUint(s.nonce, 10)
+}
+
+// OrderID returns the current engine order ID for a level, if one is resting.
+// Useful for ops/inspection and tests that need to address a synthetic order.
+func (s *Seeder) OrderID(side orderbook.Side, price float64) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.placed[priceKey(side, price)]
+	if !ok {
+		return "", false
+	}
+	return o.id, true
 }
 
 // OnTrade records a fill against a synthetic order. Wire it to the order
-// book's "trade" hook. It writes only to the fills buffer under its own lock,
-// so it never blocks on (or deadlocks with) an in-flight Converge.
+// book's "trade" hook. It writes only to the fills buffer (keyed by the full,
+// generation-stamped order ID) under its own lock, so it never blocks on — or
+// deadlocks with — an in-flight Converge, and a fill can never be applied to a
+// different generation of the same price level.
 func (s *Seeder) OnTrade(t *orderbook.Trade) {
 	if t == nil || t.Instrument != s.cfg.Instrument {
 		return
@@ -128,9 +148,8 @@ func (s *Seeder) OnTrade(t *orderbook.Trade) {
 		if !strings.HasPrefix(id, prefix) {
 			continue
 		}
-		k := strings.TrimPrefix(id, prefix)
 		s.fillMu.Lock()
-		s.fills[k] += t.Volume
+		s.fills[id] += t.Volume
 		s.fillMu.Unlock()
 	}
 }
@@ -169,55 +188,57 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 
 	bids, asks := s.ref.Depth(s.cfg.DepthLevels)
 	refVol := make(map[string]float64, len(bids)+len(asks))
-	meta := make(map[string]synthOrder, len(bids)+len(asks))
+	side := make(map[string]orderbook.Side, len(bids)+len(asks))
+	price := make(map[string]float64, len(bids)+len(asks))
 	for _, l := range bids {
 		k := priceKey(orderbook.SideBuy, l.Price)
-		refVol[k] = l.Quantity
-		meta[k] = synthOrder{id: s.synthID(orderbook.SideBuy, l.Price), side: orderbook.SideBuy, price: l.Price}
+		refVol[k], side[k], price[k] = l.Quantity, orderbook.SideBuy, l.Price
 	}
 	for _, l := range asks {
 		k := priceKey(orderbook.SideSell, l.Price)
-		refVol[k] = l.Quantity
-		meta[k] = synthOrder{id: s.synthID(orderbook.SideSell, l.Price), side: orderbook.SideSell, price: l.Price}
+		refVol[k], side[k], price[k] = l.Quantity, orderbook.SideSell, l.Price
 	}
 
 	// Compute the per-level target over the union of placed and reference
 	// levels. Stale levels (placed but absent from the reference) target zero.
 	type plan struct {
-		o       synthOrder
-		cur     float64
+		key     string
+		side    orderbook.Side
+		price   float64
 		target  float64
 		existed bool
+		curID   string // engine ID of the order to cancel, if existed
 	}
 	plans := make(map[string]plan, len(refVol)+len(s.placed))
-	for k, want := range meta {
+	for k := range refVol {
 		cur, existed := s.placed[k]
-		var c float64
+		c := 0.0
+		curID := ""
 		if existed {
-			c = cur.volume
-			want.id, want.side, want.price = cur.id, cur.side, cur.price
+			c, curID = cur.volume, cur.id
 		}
-		plans[k] = plan{o: want, cur: c, target: c + alpha*(refVol[k]-c), existed: existed}
+		plans[k] = plan{key: k, side: side[k], price: price[k], target: c + alpha*(refVol[k]-c), existed: existed, curID: curID}
 	}
 	for k, cur := range s.placed {
 		if _, ok := refVol[k]; ok {
 			continue // already planned above
 		}
-		plans[k] = plan{o: cur, cur: cur.volume, target: cur.volume * (1 - alpha), existed: true}
+		plans[k] = plan{key: k, side: cur.side, price: cur.price, target: cur.volume * (1 - alpha), existed: true, curID: cur.id}
 	}
 
 	// Pass 1: cancel everything that must change (removed, drained, or
 	// resized). A not-found order was already filled/cancelled away — benign.
 	apply := make([]plan, 0, len(plans))
 	for k, p := range plans {
-		if p.existed && math.Abs(p.target-p.cur) <= volEps {
+		cur := s.placed[k]
+		if p.existed && math.Abs(p.target-cur.volume) <= volEps {
 			continue // already at target; leave the resting order in place
 		}
 		if p.existed {
-			if _, err := s.matcher.CancelOrder(ctx, s.cfg.Instrument, p.o.id); err != nil && !errors.Is(err, orderbook.ErrOrderNotFound) {
-				return st, fmt.Errorf("cancel %s: %w", p.o.id, err)
+			if _, err := s.matcher.CancelOrder(ctx, s.cfg.Instrument, p.curID); err != nil && !errors.Is(err, orderbook.ErrOrderNotFound) {
+				return st, fmt.Errorf("cancel %s: %w", p.curID, err)
 			}
-			delete(s.placed, k)
+			delete(s.placed, k) // its generation is retired; buffered fills for curID now go stale
 		}
 		if p.target <= volEps {
 			if p.existed {
@@ -228,30 +249,27 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 		apply = append(apply, p)
 	}
 
-	// Pass 2: place new/resized levels at their target volume.
+	// Pass 2: place new/resized levels at their target volume with a fresh
+	// generation ID. The tracked volume is the intended target; any fill
+	// (including one during this very placement, e.g. crossing a resting user
+	// order) is captured by OnTrade against the new ID and folded next pass —
+	// the single source of fill truth, so no double counting.
 	for _, p := range apply {
+		id := s.nextIDLocked(p.side, p.price)
 		ord := &orderbook.Order{
-			ID:         p.o.id,
+			ID:         id,
 			Instrument: s.cfg.Instrument,
-			Price:      p.o.price,
+			Price:      p.price,
 			Volume:     p.target,
-			Side:       p.o.side,
+			Side:       p.side,
 			Metadata:   map[string]string{MetadataKey: MetadataValue},
 		}
 		trades, _, err := s.matcher.PlaceLimit(ctx, ord)
 		if err != nil {
-			return st, fmt.Errorf("place %s: %w", p.o.id, err)
-		}
-		var filled float64
-		for _, t := range trades {
-			filled += t.Volume
+			return st, fmt.Errorf("place %s: %w", id, err)
 		}
 		st.Trades += len(trades)
-		rested := p.target - filled
-		if rested > volEps {
-			p.o.volume = rested
-			s.placed[priceKey(p.o.side, p.o.price)] = p.o
-		}
+		s.placed[p.key] = synthOrder{id: id, side: p.side, price: p.price, volume: p.target}
 		if p.existed {
 			st.Resized++
 		} else {
@@ -261,17 +279,28 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 	return st, nil
 }
 
-// foldFillsLocked applies buffered fills to the placed volumes. Caller holds s.mu.
+// foldFillsLocked applies buffered fills to the placed volumes. Fills are keyed
+// by full (generation-stamped) order ID; a fill whose ID is no longer the
+// current generation for its level is discarded, so a fill against a replaced
+// order never decrements its successor. Caller holds s.mu.
 func (s *Seeder) foldFillsLocked() {
 	s.fillMu.Lock()
 	fills := s.fills
 	s.fills = make(map[string]float64)
 	s.fillMu.Unlock()
-	for k, v := range fills {
-		cur, ok := s.placed[k]
+	if len(fills) == 0 {
+		return
+	}
+	byID := make(map[string]string, len(s.placed)) // current order ID -> levelKey
+	for k, o := range s.placed {
+		byID[o.id] = k
+	}
+	for id, v := range fills {
+		k, ok := byID[id]
 		if !ok {
-			continue
+			continue // stale generation (order was replaced/removed) — discard
 		}
+		cur := s.placed[k]
 		cur.volume -= v
 		if cur.volume <= volEps {
 			delete(s.placed, k)
@@ -302,9 +331,11 @@ func (s *Seeder) Clear(ctx context.Context) error {
 	return nil
 }
 
-// Run reconciles on every tick of interval until ctx is cancelled. Reconcile
-// errors are logged, not fatal, so a transient engine error doesn't tear down
-// seeding.
+// Run reconciles exactly (alpha=1) on every tick until ctx is cancelled — the
+// "instant mirror" mode, with no return-to-reference easing. It is mutually
+// exclusive with RTR.Run on the same seeder; use one driver or the other, not
+// both (they would fight over the synthetic orders). Errors are logged, not
+// fatal, so a transient engine error doesn't tear down seeding.
 func (s *Seeder) Run(ctx context.Context, interval time.Duration) error {
 	t := time.NewTicker(interval)
 	defer t.Stop()

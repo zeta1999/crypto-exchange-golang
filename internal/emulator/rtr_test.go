@@ -127,6 +127,58 @@ func cmpApprox(t *testing.T, side string, got []orderbook.Level, want []feed.LOB
 	}
 }
 
+// TestFillAccountingMatchesEngine verifies the seeder's tracked volume stays
+// consistent with the engine's real resting volume across fill+converge
+// cycles, including a fill buffered against an order that is then re-placed
+// (the generation-ID discard path). After convergence the tracked volume and
+// the engine volume must agree.
+func TestFillAccountingMatchesEngine(t *testing.T) {
+	t0 := time.Unix(1700000000, 0).UTC()
+	eng, book := newWiredEngine("BTC-USD")
+	ref := reference.NewBook("BTC-USD", "coinbase")
+	ref.Apply(bookSnap(1, t0, true, []feed.LOBLevel{lvl(100, 5)}, []feed.LOBLevel{lvl(101, 5)}))
+	s := NewSeeder(eng, ref, Config{Instrument: "BTC-USD"})
+	book.RegisterHook(func(evt string, data interface{}) {
+		if evt == "trade" {
+			s.OnTrade(data.(*orderbook.Trade))
+		}
+	})
+	if _, err := s.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stale fill against a since-replaced generation must not corrupt the level:
+	// resize the ask (mints gen #2), then inject a fill for the OLD id.
+	oldID, _ := s.OrderID(orderbook.SideSell, 101)
+	ref.Apply(bookSnap(2, t0.Add(time.Second), false, nil, []feed.LOBLevel{lvl(101, 6)}))
+	if _, err := s.Converge(context.Background(), 1.0); err != nil { // re-place ask@101 as gen #2
+		t.Fatal(err)
+	}
+	s.OnTrade(&orderbook.Trade{Instrument: "BTC-USD", SellOrderID: oldID, Volume: 99}) // stale gen
+	if _, err := s.Converge(context.Background(), 1.0); err != nil {
+		t.Fatal(err)
+	}
+	if got := askVol(t, eng, 101); got != 6 {
+		t.Errorf("stale-gen fill corrupted level: ask@101 = %v, want 6", got)
+	}
+
+	// Real fill against the current generation eats 2; converge tops it back up.
+	curID, _ := s.OrderID(orderbook.SideSell, 101)
+	if _, _, err := eng.PlaceMarket(context.Background(), &orderbook.Order{ID: "u1", Instrument: "BTC-USD", Side: orderbook.SideBuy, Volume: 2}); err != nil {
+		t.Fatal(err)
+	}
+	_ = curID
+	if got := askVol(t, eng, 101); got != 4 { // 6 - 2
+		t.Fatalf("after user fill ask@101 = %v, want 4", got)
+	}
+	if _, err := s.Converge(context.Background(), 1.0); err != nil { // alpha=1 snaps back to 6
+		t.Fatal(err)
+	}
+	if got := askVol(t, eng, 101); got != 6 {
+		t.Errorf("after converge ask@101 = %v, want 6 (refilled)", got)
+	}
+}
+
 // TestConvergeDrainsStaleProgressively: a level that leaves the reference is
 // drained toward zero over successive passes, not removed instantly.
 func TestConvergeDrainsStaleProgressively(t *testing.T) {

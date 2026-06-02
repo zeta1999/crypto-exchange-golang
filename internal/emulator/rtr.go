@@ -48,17 +48,23 @@ func (r *RTR) Step(ctx context.Context, dt time.Duration) (Stats, error) {
 	return r.seeder.Converge(ctx, r.Alpha(dt))
 }
 
-// Run converges on every tick until ctx is cancelled. Convergence errors are
-// logged, not fatal, so a transient engine error doesn't tear down the loop.
+// Run converges on every tick until ctx is cancelled, using the actual
+// elapsed time between ticks as dt (so a slow Step or a dropped/coalesced
+// ticker tick doesn't desync convergence from wall-clock). Convergence errors
+// are logged, not fatal. Run is the return-to-reference driver; do not also
+// run Seeder.Run against the same seeder (see its doc).
 func (r *RTR) Run(ctx context.Context, tick time.Duration) error {
 	t := time.NewTicker(tick)
 	defer t.Stop()
+	last := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-t.C:
-			if _, err := r.Step(ctx, tick); err != nil {
+		case now := <-t.C:
+			dt := now.Sub(last)
+			last = now
+			if _, err := r.Step(ctx, dt); err != nil {
 				slog.Warn("rtr step error", "instrument", r.seeder.cfg.Instrument, "error", err)
 			}
 		}
