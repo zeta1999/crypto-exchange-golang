@@ -126,7 +126,9 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [ ] wire balances into account endpoints; off-by-default flag; keys via env only
 
 ## Phase 11 — Hardening & observability
-- [ ] Prometheus metrics (book deviation, λ/VPIN, fills, feed lag, injected-latency histograms)
-- [ ] structured logging, config validation, API rate limiting
+- [x] Prometheus-text metrics (`internal/metrics`, dependency-free): orders/trades/cancels by edge, feed events, converge/RTR/tape/toxicity, per-instrument synthetic/anomalies/crossings/stale/VPIN/λ gauges; `:9090/metrics`
+- [x] API rate limiting (`internal/ratelimit` token bucket + capped keyed limiter; wired on both REST edges → 429/-1003); config validation (`config.Validate()` fail-fast)
+- [x] brutal review + hardening (KeyedLimiter maxKeys cap)
 - [ ] scenario + golden-file tests in CI (RTR, toxicity, fault injection)
+- [ ] gRPC/native-WS request metrics; injected-latency histograms
 - [ ] README refresh with run instructions

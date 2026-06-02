@@ -12,12 +12,13 @@ done & reviewed. Phase 7 core adds the artificial **price shift** (manufacture
 cross-venue arb dislocations) and **latency** injectors (config, wired,
 default-off, all reviewed). **Remaining Phase 7:** full trace replay, scenario
 scripting, cross-venue harness, order-ack/fill-report latency at API edges.
-**Phases 8 + 9 fully done** — Binance + Coinbase **REST + WS** edges (signed order lifecycle,
-market + user-data streams), live-verified, reviewed, race-clean. The emulator now speaks both
-venues' full API surface. **Next:** Phase 7 tail (trace replay, scenario scripting, cross-venue
-arb harness, ack/fill latency at API edges); Phase 11 hardening/metrics (Prometheus, rate limit,
-golden tests); Phase 10 custody (stretch). Deferred: decimal Mul/Div limb-math, ES256 JWT,
-CCXT/GoEx conformance run.
+**Near-complete.** Done & reviewed: Phases 1–6, Phase 7 (price-shift, latency, scenario
+scripting), Phases 8–9 (Binance + Coinbase REST + WS), `pkg/decimal` + migration, and Phase 11
+hardening (metrics, rate limiting, config validation). **Remaining:** Phase 7 tail (full trace
+replay through the whole emulator; cross-venue arb harness; ack/fill latency at API edges);
+Phase 11 tail (scenario golden-file CI tests, gRPC/WS request metrics); **Phase 10 custody**
+(stretch, testnet). Deferred polish: decimal Mul/Div limb-math (PLAN §9.7), Coinbase ES256 JWT,
+the CCXT/GoEx endpoint-swap conformance run.
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -36,7 +37,7 @@ CCXT/GoEx conformance run.
 | 8 | Binance-compatible API | ☑ | `internal/api/binance` REST (signed order/cancel/openOrders/account + ping/time/depth/ticker) **and WS** (market @trade/@depth20 + user-data executionReport via listenKey). HMAC auth, symbol map, registry w/ hook fills. CI+race green; live-verified; reviewed (incl. WS concurrency clean). Deferred: @depth diffs, exchangeInfo, real balances. |
 | 9 | Coinbase-compatible API | ☑ | `internal/api/coinbase` Advanced Trade REST (signed orders/batch_cancel/historical/accounts + time/product_book/products) **and WS** (level2/market_trades/user channels, message-based subscribe). CB-ACCESS HMAC auth, registry w/ hook fills (:8083). CI+race green; live-verified; reviewed clean. Deferred: ES256 JWT, true level2 diffs. |
 | 10 | Custody examples (stretch) | ☐ | XLM / Solana / ERC20, testnet only |
-| 11 | Hardening & observability | ☐ | metrics, scenario tests |
+| 11 | Hardening & observability | ◐ | `internal/metrics` (dependency-free Prometheus-text registry, instrumented pipeline + API edges, `:9090/metrics`), `internal/ratelimit` (token bucket + keyed, capped; wired on both REST edges → 429/-1003), `config.Validate()` fail-fast. CI+race green; live-verified (metrics scrape, rate limiter trips). Remaining: scenario golden-file CI tests, gRPC/WS request metrics. |
 
 ## How to run
 `EXCHANGE_CONFIG=configs/dev.yaml go run ./cmd/exchange` → live Coinbase mirror on
