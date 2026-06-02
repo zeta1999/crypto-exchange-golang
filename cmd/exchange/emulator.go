@@ -73,7 +73,6 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 	// belong at the API edges (Phase 8/9). Seed reuses the toxicity seed so a
 	// scenario is reproducible from a single knob.
 	shift := emulator.NewPriceShift(cfg.PriceShift.OffsetBps, cfg.PriceShift.Scale)
-	shiftActive := !shift.IsIdentity()
 	lat := emulator.NewLatency(emulator.LatencyConfig{
 		FeedToBook: time.Duration(cfg.Latency.FeedToBookMs) * time.Millisecond,
 		OrderAck:   time.Duration(cfg.Latency.OrderAckMs) * time.Millisecond,
@@ -81,6 +80,28 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 		Jitter:     time.Duration(cfg.Latency.JitterMs) * time.Millisecond,
 	}, cfg.Toxicity.Seed)
 	// TODO(phase7): apply OrderAck/FillReport at API edges (Phase 8/9).
+
+	// Controls is the runtime-mutable holder the dispatcher + workers read on
+	// every event. Seeded from the static config above, it is identical to the
+	// pre-scenario behavior until a scenario runner mutates it (below). Reads
+	// are lock-free atomic loads, so the scenario writer never blocks the
+	// dispatcher hot path.
+	controls := emulator.NewControls(shift, lat)
+
+	// Optional scripted timeline (PLAN §5 Phase 7, the test-bed core): a JSONL
+	// scenario drives the fault injectors through regime changes on cue. Empty
+	// file ⇒ no runner; controls stay at the static config values above. Loaded
+	// before any worker starts so a malformed scenario fails startup loudly.
+	if cfg.Scenario.File != "" {
+		sc, err := emulator.LoadScenario(cfg.Scenario.File, cfg.Toxicity.Seed)
+		if err != nil {
+			return nil, fmt.Errorf("load scenario: %w", err)
+		}
+		log.Printf("scenario loaded: %d events (file=%s speed=%v)", sc.Len(), cfg.Scenario.File, cfg.Scenario.Speed)
+		start := time.Now()
+		speed := cfg.Scenario.Speed
+		group.Go(func() error { return runUntilCanceled(sc.Run(ctx, controls, start, speed)) })
+	}
 
 	// Each instrument gets its own buffered channel + worker goroutine handling
 	// BOTH book and trade events, so the shared dispatcher only routes (never
@@ -115,6 +136,9 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 					}
 					switch ev.Kind {
 					case feed.EventBook:
+						// Read the current latency live (a scenario may have swapped
+						// it). Same Latency until/unless a scenario mutates it.
+						lat := controls.Latency()
 						lat.Sleep(ctx, lat.FeedToBookDelay()) // per-instrument slow feed
 						refBook.Apply(ev.Book)
 					case feed.EventTrade:
@@ -145,9 +169,10 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 				if !ok {
 					return nil
 				}
-				if shiftActive {
-					ev = shift.ApplyEvent(ev) // coherent dislocation across book + tape
-				}
+				// Read the current shift live (a scenario may have changed it).
+				// ApplyEvent is a fast no-op when the shift is the identity, so
+				// the common static-no-shift case stays zero-overhead.
+				ev = controls.PriceShift().ApplyEvent(ev) // coherent dislocation across book + tape
 				var sym string
 				switch ev.Kind {
 				case feed.EventBook:

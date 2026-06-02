@@ -79,3 +79,6 @@ emulator:
     order_ack_ms: 0            # API-edge ack delay (Phase 8/9)
     fill_report_ms: 0          # API-edge fill-report delay (Phase 8/9)
     jitter_ms: 0               # uniform random [0, jitter) added on top of each base delay
+  scenario:                    # scripted test-bed timeline (Phase 7); empty file = static controls (no runner)
+    file: ""                   # path to a JSONL scenario; each line: {"at_ms":N,"action":"price_shift|latency","params":{...}}
+    speed: 1.0                 # schedule scaling: 1.0 = real time, >1 accelerates (10 runs a 10s timeline in 1s)

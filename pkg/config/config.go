@@ -102,6 +102,18 @@ type Emulator struct {
 	Toxicity    EmulatorToxicity   `yaml:"toxicity"`
 	PriceShift  EmulatorPriceShift `yaml:"price_shift"`
 	Latency     EmulatorLatency    `yaml:"latency"`
+	Scenario    EmulatorScenario   `yaml:"scenario"`
+}
+
+// EmulatorScenario configures the scripted test-bed timeline (PLAN §5 Phase 7).
+// When File is empty (the dev default) no runner starts and the controls stay
+// at the static price_shift/latency values above. File is a JSONL scenario
+// (one timed action per line) that mutates the fault injectors on cue. Speed
+// scales the schedule: 1.0 is real time, >1 accelerates (e.g. 10 runs a 10s
+// timeline in 1s); <= 0 is treated as 1.
+type EmulatorScenario struct {
+	File  string  `yaml:"file"`
+	Speed float64 `yaml:"speed"`
 }
 
 // EmulatorPriceShift configures the artificial price shift (PLAN §5 Phase 7):
