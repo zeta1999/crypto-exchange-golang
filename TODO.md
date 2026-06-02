@@ -81,8 +81,8 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] `internal/emulator/latency.go`: artificial latency — feed→book (wired), order_ack/fill_report (TODO: apply at API edges, Phase 8/9), per-edge, jitter
 - [x] `internal/emulator/priceshift.go`: artificial price shift — `offset_bps` + `scale` per venue (wired into dispatcher; shifts both float Price and PriceDecimal)
 - [ ] cross-venue dislocation harness (two venues driven apart → closeable arbitrage)
-- [ ] scenario scripting format (YAML/JSONL): timeline of injection events
-- [ ] config: `emulator.{latency,price_shift,scenario}`
+- [x] scenario scripting format (JSONL): timeline of injection events (`scenario.go`; runtime-mutable `Controls`; price_shift+latency actions; deterministic; reviewed)
+- [x] config: `emulator.{latency,price_shift,scenario}`
 - [ ] tests: zeroed controls = no-op; injected latency shows in ack/fill timestamps;
       seeded scenario reproduces bit-for-bit; arb scenario is exploitable then closes
 
