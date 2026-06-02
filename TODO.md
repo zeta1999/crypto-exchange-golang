@@ -78,8 +78,8 @@ fix → CI → manual TESTING subagent → iterate until clean.
 
 ## Phase 7 — Scenario & fault injection (OMS / strategy test bed)
 - [ ] Trace replay (full): feed whole emulator from a recorded trace, deterministic, `speed`
-- [ ] `internal/emulator/latency.go`: artificial latency — feed→book, order_ack, fill_report, per-edge, jitter
-- [ ] `internal/emulator/priceshift.go`: artificial price shift — `offset_bps` + `scale` per venue
+- [x] `internal/emulator/latency.go`: artificial latency — feed→book (wired), order_ack/fill_report (TODO: apply at API edges, Phase 8/9), per-edge, jitter
+- [x] `internal/emulator/priceshift.go`: artificial price shift — `offset_bps` + `scale` per venue (wired into dispatcher; shifts both float Price and PriceDecimal)
 - [ ] cross-venue dislocation harness (two venues driven apart → closeable arbitrage)
 - [ ] scenario scripting format (YAML/JSONL): timeline of injection events
 - [ ] config: `emulator.{latency,price_shift,scenario}`

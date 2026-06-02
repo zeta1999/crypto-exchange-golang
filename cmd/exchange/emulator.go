@@ -66,6 +66,22 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 
 	refs := reference.NewSet()
 
+	// Phase 7 fault injectors. The price shift transforms every venue price so
+	// the reference book, seeder, AND tape all see a coherent dislocation
+	// (skipped entirely when it is the identity, for zero overhead). The
+	// latency injector wires the FEED→BOOK delay here; OrderAck/FillReport
+	// belong at the API edges (Phase 8/9). Seed reuses the toxicity seed so a
+	// scenario is reproducible from a single knob.
+	shift := emulator.NewPriceShift(cfg.PriceShift.OffsetBps, cfg.PriceShift.Scale)
+	shiftActive := !shift.IsIdentity()
+	lat := emulator.NewLatency(emulator.LatencyConfig{
+		FeedToBook: time.Duration(cfg.Latency.FeedToBookMs) * time.Millisecond,
+		OrderAck:   time.Duration(cfg.Latency.OrderAckMs) * time.Millisecond,
+		FillReport: time.Duration(cfg.Latency.FillReportMs) * time.Millisecond,
+		Jitter:     time.Duration(cfg.Latency.JitterMs) * time.Millisecond,
+	}, cfg.Toxicity.Seed)
+	// TODO(phase7): apply OrderAck/FillReport at API edges (Phase 8/9).
+
 	// Each instrument's tape runs on its own goroutine, fed by a buffered
 	// channel, so a burst of trade prints can't head-of-line block reference
 	// book updates (which the dispatcher applies inline) or the seeder/RTR.
@@ -120,8 +136,16 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 				if !ok {
 					return nil
 				}
+				// Apply the price shift before routing so the reference book,
+				// seeder, and tape all observe the same dislocated venue.
+				if shiftActive {
+					ev = shift.ApplyEvent(ev)
+				}
 				switch ev.Kind {
 				case feed.EventBook:
+					// Feed→book latency delays the reference goroutine inline
+					// (intended: a slow feed). No-op for the dev default of 0.
+					lat.Sleep(ctx, lat.FeedToBookDelay())
 					refs.Apply(ev) // fast; rebuilds the reference book inline
 				case feed.EventTrade:
 					if ev.Trade == nil {

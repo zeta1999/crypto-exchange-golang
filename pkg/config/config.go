@@ -53,12 +53,36 @@ type Config struct {
 // synthetic liquidity in the engine, with return-to-reference). When
 // disabled, the exchange runs as a plain matching engine. See PLAN.md.
 type Emulator struct {
-	Enabled     bool              `yaml:"enabled"`
-	Venue       string            `yaml:"venue"` // "coinbase" | "binance"
-	Instruments []string          `yaml:"instruments"`
-	Reference   EmulatorReference `yaml:"reference"`
-	RTR         EmulatorRTR       `yaml:"rtr"`
-	Toxicity    EmulatorToxicity  `yaml:"toxicity"`
+	Enabled     bool               `yaml:"enabled"`
+	Venue       string             `yaml:"venue"` // "coinbase" | "binance"
+	Instruments []string           `yaml:"instruments"`
+	Reference   EmulatorReference  `yaml:"reference"`
+	RTR         EmulatorRTR        `yaml:"rtr"`
+	Toxicity    EmulatorToxicity   `yaml:"toxicity"`
+	PriceShift  EmulatorPriceShift `yaml:"price_shift"`
+	Latency     EmulatorLatency    `yaml:"latency"`
+}
+
+// EmulatorPriceShift configures the artificial price shift (PLAN §5 Phase 7):
+// shifted = price * scale * (1 + offset_bps/10000). The zero value (offset_bps
+// 0, scale 0 → treated as 1) is the identity (no shift), so the dev default is
+// a no-op. Used to drive two emulated venues apart and manufacture a
+// closeable cross-venue arbitrage.
+type EmulatorPriceShift struct {
+	OffsetBps float64 `yaml:"offset_bps"` // additive shift in basis points
+	Scale     float64 `yaml:"scale"`      // multiplicative shift (0 or 1 = none)
+}
+
+// EmulatorLatency configures artificial latency injection (PLAN §5 Phase 7).
+// All zero (the dev default) means no added delay anywhere. feed_to_book_ms
+// delays the reference goroutine (a slow feed); order_ack_ms / fill_report_ms
+// apply at the API edges (Phase 8/9). jitter_ms adds a uniform random
+// [0, jitter) on top of each base delay.
+type EmulatorLatency struct {
+	FeedToBookMs int `yaml:"feed_to_book_ms"`
+	OrderAckMs   int `yaml:"order_ack_ms"`
+	FillReportMs int `yaml:"fill_report_ms"`
+	JitterMs     int `yaml:"jitter_ms"`
 }
 
 // EmulatorToxicity configures the adverse-selection model (PLAN [b]). Scale=0

@@ -40,3 +40,11 @@ emulator:
     bucket_volume: 1.0         # VPIN volume-bucket size (base asset)
     buckets: 50                # VPIN buckets averaged
     seed: 42                   # deterministic firing
+  price_shift:                 # artificial price shift — manufacture cross-venue arb (test bed)
+    offset_bps: 0              # additive shift in basis points (0 = none)
+    scale: 1.0                 # multiplicative shift (1.0 = none); shifted = price*scale*(1+offset_bps/10000)
+  latency:                     # artificial latency injection (test bed); all 0 = no added delay
+    feed_to_book_ms: 0         # delays the reference goroutine (a slow feed)
+    order_ack_ms: 0            # API-edge ack delay (Phase 8/9)
+    fill_report_ms: 0          # API-edge fill-report delay (Phase 8/9)
+    jitter_ms: 0               # uniform random [0, jitter) added on top of each base delay
