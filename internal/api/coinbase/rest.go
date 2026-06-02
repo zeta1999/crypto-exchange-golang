@@ -360,6 +360,13 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	// The registry's filled_size/status are updated by the order book's
 	// synchronous "trade" hook (registry.OnTrade), which already ran inside
 	// PlaceLimit/PlaceMarket for both sides of each trade.
+	//
+	// Surface the order's resulting state on the WS user channel. The book
+	// "trade"/"cancel" hooks emit intermediate fills/cancels; this final emit
+	// covers the initial OPEN state of a resting order and the FILLED state of
+	// a market order (whose resting counterpart, not itself, drives the hook).
+	s.EmitUserByOrderID(rec.OrderID)
+
 	echoCfg := cfg
 	writeJSON(w, createOrderResponse{
 		Success: true,

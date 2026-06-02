@@ -238,6 +238,19 @@ func (r *Registry) Remove(oid string) {
 	delete(r.byClient, rec.ClientOrderID)
 }
 
+// getByEngine returns a value copy of the record for an engine order ID (e.g.
+// "coinbase:42"), under lock. Used by the WS user channel to read the
+// just-updated record from a book hook. ok is false for non-edge IDs.
+func (r *Registry) getByEngine(engineID string) (orderRecord, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.byEngine[engineID]
+	if !ok {
+		return orderRecord{}, false
+	}
+	return *rec, true
+}
+
 // snapshot returns a value copy of the record under lock.
 func (r *Registry) snapshot(oid string) (orderRecord, bool) {
 	r.mu.Lock()

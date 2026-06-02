@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
@@ -20,13 +22,21 @@ type Engine interface {
 // Server is a Coinbase-Advanced-Trade-compatible REST edge. It is an
 // http.Handler that routes the /api/v3/brokerage subset to the engine.
 type Server struct {
-	engine   Engine
-	products *Products
-	auth     *Authenticator
-	registry *Registry
-	mux      *http.ServeMux
-	now      func() time.Time
-	accounts []Account
+	engine      Engine
+	products    *Products
+	auth        *Authenticator
+	registry    *Registry
+	mux         *http.ServeMux
+	now         func() time.Time
+	accounts    []Account
+	broadcaster *Broadcaster
+	tradeSeq    atomic.Int64
+}
+
+// nextTradeID synthesizes a monotonic trade_id for a market_trades frame (the
+// order book Trade carries no id). Independent of REST order IDs.
+func (s *Server) nextTradeID() string {
+	return strconv.FormatInt(s.tradeSeq.Add(1), 10)
 }
 
 // Account is a Coinbase brokerage account entry. The engine has no ledger, so
@@ -69,12 +79,13 @@ func WithAccounts(a []Account) Option {
 // registry's OnTrade/OnCancel hooks onto the order book (see AttachHooks).
 func New(engine Engine, products *Products, auth *Authenticator, registry *Registry, opts ...Option) *Server {
 	s := &Server{
-		engine:   engine,
-		products: products,
-		auth:     auth,
-		registry: registry,
-		mux:      http.NewServeMux(),
-		now:      time.Now,
+		engine:      engine,
+		products:    products,
+		auth:        auth,
+		registry:    registry,
+		mux:         http.NewServeMux(),
+		now:         time.Now,
+		broadcaster: NewBroadcaster(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -92,6 +103,9 @@ func New(engine Engine, products *Products, auth *Authenticator, registry *Regis
 	s.mux.HandleFunc("/api/v3/brokerage/orders/historical/", s.handleHistoricalOrder)
 	s.mux.HandleFunc("/api/v3/brokerage/accounts", s.handleAccounts)
 
+	// WebSocket: single message-driven endpoint (client sends subscribe frames).
+	s.mux.HandleFunc("/ws", s.handleWS)
+
 	return s
 }
 
@@ -101,6 +115,7 @@ func (s *Server) Handler() http.Handler { return s.mux }
 // AttachHooks registers the registry's trade/cancel hooks on an order book. A
 // caller that constructs the book wires this once at startup.
 func (s *Server) AttachHooks(book *orderbook.OrderBook) {
+	// Registry hook FIRST: folds the trade/cancel into the order record.
 	book.RegisterHook(func(evt string, data interface{}) {
 		switch evt {
 		case "trade":
@@ -113,11 +128,28 @@ func (s *Server) AttachHooks(book *orderbook.OrderBook) {
 			}
 		}
 	})
+	// WS emit hook SECOND: reads the now-updated record to push market_trades
+	// and user-channel frames. Registration order guarantees the record is
+	// current when this fires.
+	book.RegisterHook(func(evt string, data interface{}) {
+		switch evt {
+		case "trade":
+			if t, ok := data.(*orderbook.Trade); ok {
+				s.onBookTrade(t)
+			}
+		case "cancel":
+			if o, ok := data.(*orderbook.Order); ok {
+				s.onBookCancel(o)
+			}
+		}
+	})
 }
 
 // ListenAndServe runs the edge with graceful shutdown, mirroring httpserver.
 func ListenAndServe(ctx context.Context, addr string, srv *Server, certFile, keyFile string) error {
 	server := &http.Server{Addr: addr, Handler: srv.mux}
+	// Run the level2 refresh ticker for the lifetime of the server.
+	go srv.Start(ctx)
 	go func() {
 		<-ctx.Done()
 		_ = server.Shutdown(context.Background())

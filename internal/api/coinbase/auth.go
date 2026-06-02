@@ -56,6 +56,10 @@ func NewAuthenticator(apiKey, secret, passphrase string, now func() time.Time) *
 	}
 }
 
+// APIKeyString returns the configured API key as a string. The WS user channel
+// uses it for its simplified credential check (see ws.go authWS).
+func (a *Authenticator) APIKeyString() string { return string(a.apiKey) }
+
 // decodeSecret returns the HMAC key bytes for a configured secret: the
 // base64-decoded form if it decodes cleanly (Coinbase convention), else the raw
 // bytes (emulator convenience).
