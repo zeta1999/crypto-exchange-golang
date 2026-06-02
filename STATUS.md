@@ -32,8 +32,17 @@ _Last updated: 2026-06-02_
 
 ## Decisions log
 - 2026-06-02: CI is a **local `ci.sh`** script, not GitHub Actions.
-- 2026-06-02: Feed adapters are copied/vendored from `../this-is-not-bbg` (they live in
-  `internal/`, not importable). Provenance noted in `internal/feed/`.
+- 2026-06-02: Feed adapters are **copied/vendored** from `../this-is-not-bbg` (they live in
+  `internal/`, module `github.com/notbbg/notbbg/server`, not importable). Vendored into
+  `internal/feed/` with a provenance note. **Confirmed: vendor, do not import.**
+- 2026-06-02: Drop notbbg's pub/sub `bus.Bus`; use a plain channel-based `Source`
+  interface (`Start(ctx) (<-chan Event, error)`, `Name()`, `Status()`).
+- 2026-06-02: Coinbase `level2` is subscribed-but-unpublished upstream — we implement
+  parse+emit ourselves (Phase 1).
+- 2026-06-02: Module path stays `github.com/zeta1999/crypto-exchange-golang` (inherited).
+- 2026-06-02: Binance/Coinbase API compatibility ships a **documented subset**, not full parity.
+- 2026-06-02: Custody (XLM/Solana/ERC20) is **stretch, testnet-only, off by default**, keys via env.
+- 2026-06-02: Determinism — matching deterministic; RTR + toxicity use a seedable RNG.
 - 2026-06-02: Toxicity uses Kyle's λ + VPIN with a global `scale` knob (0 = off).
 
 ## Blocked / waiting
