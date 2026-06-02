@@ -3,7 +3,11 @@
 _Last updated: 2026-06-02_
 
 ## Current phase
-**Phase 4 — Return-to-Reference** ✅ complete (CI green, brutal review applied) → next: **wire emulator into runnable binary, then Phase 5 — Trade replay sync**
+**Runnable product milestone** ✅ — `go run ./cmd/exchange` boots a live Coinbase-mirroring
+exchange (feed → reference → seeded synthetic liquidity + RTR), tradable via gRPC/HTTP/WS;
+verified live (book holds 20 levels/side, uncrossed, tracking the venue). Phases 1–4 + the
+`pkg/decimal` type are done & reviewed. **Next:** Phase 5 — Trade replay sync; then the
+float64→Decimal migration (PLAN §9.8) and Phases 6–11.
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -23,6 +27,12 @@ _Last updated: 2026-06-02_
 | 9 | Coinbase-compatible API | ☐ | Advanced Trade REST + WS subset |
 | 10 | Custody examples (stretch) | ☐ | XLM / Solana / ERC20, testnet only |
 | 11 | Hardening & observability | ☐ | metrics, scenario tests |
+
+## How to run
+`EXCHANGE_CONFIG=configs/dev.yaml go run ./cmd/exchange` → live Coinbase mirror on
+gRPC :50051 / HTTP(S) :8080 / WS :8081. Query a book:
+`curl -sk -H "Authorization: Bearer dev-secret-token" https://localhost:8080/snapshot/BTC-USD`.
+Set `emulator.enabled: false` for a plain offline matching engine.
 
 ## Baseline (inherited skeleton)
 - ☑ Price-time matching engine (`internal/engine`, `internal/orderbook`)
