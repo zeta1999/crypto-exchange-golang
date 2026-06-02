@@ -35,6 +35,7 @@ type Server struct {
 	limiter     *ratelimit.KeyedLimiter
 	metrics     *Metrics
 	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
+	ackDelay    func() time.Duration
 }
 
 // nextTradeID synthesizes a monotonic trade_id for a market_trades frame (the
@@ -77,6 +78,30 @@ func WithClock(now func() time.Time) Option {
 // WithAccounts sets the static accounts returned by GET .../accounts.
 func WithAccounts(a []Account) Option {
 	return func(s *Server) { s.accounts = a }
+}
+
+// WithAckDelay injects artificial order-ack latency: the create handler sleeps
+// delay() before responding (Phase 7 slow-venue knob). nil/zero = none.
+func WithAckDelay(delay func() time.Duration) Option {
+	return func(s *Server) { s.ackDelay = delay }
+}
+
+// sleepAck applies the order-ack latency on the HTTP handler goroutine
+// (safe — never inside the book hook), respecting cancellation.
+func (s *Server) sleepAck(ctx context.Context) {
+	if s.ackDelay == nil {
+		return
+	}
+	d := s.ackDelay()
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
 }
 
 // New constructs the Coinbase edge. The caller is responsible for wiring the

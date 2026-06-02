@@ -318,6 +318,7 @@ func (s *Server) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	s.sleepAck(r.Context()) // artificial order-ack latency (Phase 7)
 	snap, _ := s.registry.snapshot(rec.OrderID)
 	writeJSON(w, orderResponse{
 		Symbol:              binSym,

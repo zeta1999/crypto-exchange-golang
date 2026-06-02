@@ -35,6 +35,7 @@ type Server struct {
 	limiter     *ratelimit.KeyedLimiter
 	metrics     *Metrics
 	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
+	ackDelay    func() time.Duration
 }
 
 // Balance is a Binance account balance entry. The engine has no ledger, so the
@@ -61,6 +62,32 @@ func WithClock(now func() time.Time) Option {
 // WithBalances sets the static balances returned by GET /api/v3/account.
 func WithBalances(b []Balance) Option {
 	return func(s *Server) { s.balances = b }
+}
+
+// WithAckDelay injects an artificial order-acknowledgement latency: the
+// place/cancel handlers sleep delay() before writing the response, simulating a
+// slow venue edge (Phase 7). delay() may return jitter. nil/zero = no delay.
+func WithAckDelay(delay func() time.Duration) Option {
+	return func(s *Server) { s.ackDelay = delay }
+}
+
+// sleepAck applies the configured order-ack latency on the (HTTP handler)
+// goroutine, respecting cancellation. Safe here — unlike the book-hook path, a
+// handler goroutine may block without stalling the matching engine.
+func (s *Server) sleepAck(ctx context.Context) {
+	if s.ackDelay == nil {
+		return
+	}
+	d := s.ackDelay()
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
 }
 
 // New constructs the Binance edge. The caller is responsible for wiring the

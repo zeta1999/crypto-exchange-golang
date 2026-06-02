@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/binance"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/coinbase"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/grpcserver"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/httpserver"
 	wsadapter "github.com/zeta1999/crypto-exchange-golang/internal/api/ws"
+	"github.com/zeta1999/crypto-exchange-golang/internal/emulator"
 	"github.com/zeta1999/crypto-exchange-golang/internal/engine"
 	"github.com/zeta1999/crypto-exchange-golang/internal/margin"
 	"github.com/zeta1999/crypto-exchange-golang/internal/metrics"
@@ -137,6 +139,19 @@ func main() {
 		return nil
 	})
 
+	// Artificial order-ack latency for the API edges (Phase 7): the static
+	// emulator.latency.order_ack_ms (+ jitter), applied on the edge handler
+	// goroutines. Scenario-driven mutation of edge latency is a future item;
+	// fill-report latency stays deferred (it can't sleep in the book hook).
+	var apiAckDelay func() time.Duration
+	if cfg.Emulator.Latency.OrderAckMs > 0 {
+		edgeLat := emulator.NewLatency(emulator.LatencyConfig{
+			OrderAck: time.Duration(cfg.Emulator.Latency.OrderAckMs) * time.Millisecond,
+			Jitter:   time.Duration(cfg.Emulator.Latency.JitterMs) * time.Millisecond,
+		}, cfg.Emulator.Toxicity.Seed)
+		apiAckDelay = edgeLat.OrderAckDelay
+	}
+
 	// Optional Binance-spot-compatible REST edge (Phase 8, a documented
 	// SUBSET). Additive and gated behind cfg.API.Binance.Enabled.
 	if cfg.API.Binance.Enabled {
@@ -151,6 +166,9 @@ func main() {
 		opts := []binance.Option{binance.WithMetrics(binance.NewMetrics(reg))}
 		if bcfg.RatePerSec > 0 {
 			opts = append(opts, binance.WithRateLimiter(ratelimit.NewKeyedLimiter(bcfg.RatePerSec, bcfg.Burst, 0)))
+		}
+		if apiAckDelay != nil {
+			opts = append(opts, binance.WithAckDelay(apiAckDelay))
 		}
 		binanceSrv := binance.New(newMeteredEngine(eng, ordersPlaced, "binance"), symbolMap, authn, registry, opts...)
 		binanceSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking
@@ -173,6 +191,9 @@ func main() {
 		opts := []coinbase.Option{coinbase.WithMetrics(coinbase.NewMetrics(reg))}
 		if ccfg.RatePerSec > 0 {
 			opts = append(opts, coinbase.WithRateLimiter(ratelimit.NewKeyedLimiter(ccfg.RatePerSec, ccfg.Burst, 0)))
+		}
+		if apiAckDelay != nil {
+			opts = append(opts, coinbase.WithAckDelay(apiAckDelay))
 		}
 		coinbaseSrv := coinbase.New(newMeteredEngine(eng, ordersPlaced, "coinbase"), products, authn, registry, opts...)
 		coinbaseSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking

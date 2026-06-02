@@ -367,6 +367,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	// a market order (whose resting counterpart, not itself, drives the hook).
 	s.EmitUserByOrderID(rec.OrderID)
 
+	s.sleepAck(r.Context()) // artificial order-ack latency (Phase 7)
 	echoCfg := cfg
 	writeJSON(w, createOrderResponse{
 		Success: true,
