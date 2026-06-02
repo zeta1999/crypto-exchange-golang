@@ -12,9 +12,10 @@ done & reviewed. Phase 7 core adds the artificial **price shift** (manufacture
 cross-venue arb dislocations) and **latency** injectors (config, wired,
 default-off, all reviewed). **Remaining Phase 7:** full trace replay, scenario
 scripting, cross-venue harness, order-ack/fill-report latency at API edges.
-**Phase 8** Binance-compatible REST edge done (signed order lifecycle, live-verified).
-**Next:** Phase 9 (Coinbase Advanced Trade REST edge, mirrors Phase 8), then WS streams
-for both, the Phase 7 tail, and Phase 11 hardening.
+**Phases 8 + 9** Binance + Coinbase REST edges done (signed order lifecycle, live-verified,
+reviewed). The emulator now speaks both venues' REST. **Next:** WS streams (market + user
+data) for both edges, the Phase 7 tail (trace replay, scenario scripting, cross-venue arb
+harness), Phase 11 hardening/metrics, Phase 10 custody (stretch).
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -31,7 +32,7 @@ for both, the Phase 7 tail, and Phase 11 hardening.
 | 6 | Configurable toxicity [b] | ☑ | `internal/toxicity` Kyle λ + VPIN; `emulator.ToxicInjector` seeded adverse sweep (scale·Score prob, scale·Impact ≤1 spread); config knobs wired; `scale:0`=pure RTR. CI green; review applied (bounded, guarded). |
 | 7 | Scenario & fault injection (test bed) | ◐ | price shift (`priceshift.go`, arb dislocation) + latency (`latency.go`) injectors done, wired, reviewed. Remaining: full trace replay, scenario scripting, cross-venue harness, ack/fill latency at API edges. |
 | 8 | Binance-compatible API | ◐ | `internal/api/binance` REST subset (ping/time/depth/ticker + signed order/cancel/openOrders/account); HMAC-SHA256 auth; symbol map; order registry w/ hook fill tracking; wired behind `api.binance.enabled`. CI green; live-verified (signed order → ACK, bad sig → -1022); reviewed. WS + user-data streams deferred. |
-| 9 | Coinbase-compatible API | ☐ | Advanced Trade REST + WS subset |
+| 9 | Coinbase-compatible API | ◐ | `internal/api/coinbase` Advanced Trade REST subset (time/product_book/products + signed orders/batch_cancel/historical/accounts); CB-ACCESS HMAC auth; order registry w/ hook fills; wired behind `api.coinbase.enabled` (:8083). CI green; live-verified (signed create → success_response, bad sign → 401); reviewed clean (no fixes needed). WS + JWT/ES256 deferred. |
 | 10 | Custody examples (stretch) | ☐ | XLM / Solana / ERC20, testnet only |
 | 11 | Hardening & observability | ☐ | metrics, scenario tests |
 

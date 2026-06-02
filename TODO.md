@@ -110,9 +110,12 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [ ] conformance: drive with CCXT / GoEx (endpoint-swapped); also `python-binance`/curl
 
 ## Phase 9 — Coinbase-compatible API
-- [ ] `internal/api/coinbase/rest.go`: create/cancel/list orders, product book, ticker
-- [ ] JWT/HMAC auth emulation
-- [ ] `internal/api/coinbase/ws.go`: level2, market_trades, user channels
+- [x] `internal/api/coinbase/rest.go`: create/batch_cancel/list orders (historical), product_book, products/ticker, accounts (stub)
+- [x] HMAC auth emulation (CB-ACCESS-*, base64-or-raw secret, ±30s window); JWT/ES256 deferred
+- [x] product allow-list; registry w/ hook fill tracking; record-before-place + rollback; wired behind config (:8083)
+- [x] tests (31) + brutal review (clean, no fixes needed); live-verified signed create + list
+- [ ] `internal/api/coinbase/ws.go`: level2, market_trades, user channels — deferred
+- [ ] JWT/ES256 production auth, fee/precision fields, persisted terminal-order history — deferred
 - [ ] conformance: drive with CCXT / GoEx (endpoint-swapped); also Coinbase Advanced Trade client/curl
 
 ## Phase 10 — Custody examples (stretch, testnet only)
