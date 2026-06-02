@@ -12,7 +12,9 @@
 package decimal
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"math/bits"
 	"strings"
@@ -49,7 +51,9 @@ func FromRaw(hi int64, lo uint64) Decimal { return Decimal{hi: hi, lo: lo} }
 // Raw returns the scaled 128-bit representation (high/low words).
 func (d Decimal) Raw() (hi int64, lo uint64) { return d.hi, d.lo }
 
-// FromInt returns the Decimal value of an integer.
+// FromInt returns the Decimal value of an integer. It never overflows: every
+// int64 (|n| ≤ ~9.2e18) scaled by 10^18 stays within the 128-bit range
+// (integer part reaches ~±1.7e20).
 func FromInt(n int64) Decimal {
 	return fromBig(new(big.Int).Mul(big.NewInt(n), scaleBig))
 }
@@ -57,8 +61,12 @@ func FromInt(n int64) Decimal {
 // FromFloat converts a float64, rounding to the nearest 1e-18. It is lossy
 // (floats can't represent most decimals exactly) and intended for ingestion
 // convenience and edge scaling, not for authoritative price/quantity values —
-// prefer Parse on the venue's decimal string.
+// prefer Parse on the venue's decimal string. Panics on NaN/±Inf and on
+// 128-bit overflow.
 func FromFloat(f float64) Decimal {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		panic("decimal: FromFloat of non-finite value")
+	}
 	bf := new(big.Float).SetPrec(200).SetFloat64(f)
 	bf.Mul(bf, new(big.Float).SetInt(scaleBig))
 	// Round half away from zero.
@@ -202,11 +210,23 @@ func (d Decimal) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + d.StringPrec(ScaleDigits) + `"`), nil
 }
 
-// UnmarshalJSON accepts either a JSON string or a bare JSON number.
+// UnmarshalJSON accepts a JSON string ("123.45") or a bare JSON number
+// (123.45); JSON null leaves the value unchanged. A quoted value is decoded as
+// a proper JSON string (so escapes and one-sided quotes are handled
+// correctly). Exponent notation (1.5e2) is not supported — venues quote exact
+// decimal strings, which is the intended wire form.
 func (d *Decimal) UnmarshalJSON(data []byte) error {
 	s := strings.TrimSpace(string(data))
-	s = strings.TrimPrefix(s, `"`)
-	s = strings.TrimSuffix(s, `"`)
+	if s == "null" {
+		return nil
+	}
+	if len(s) > 0 && s[0] == '"' {
+		var str string
+		if err := json.Unmarshal(data, &str); err != nil {
+			return err
+		}
+		s = str
+	}
 	v, err := Parse(s)
 	if err != nil {
 		return err
@@ -242,14 +262,22 @@ func (d Decimal) Sub(e Decimal) Decimal {
 // Neg returns -d.
 func (d Decimal) Neg() Decimal { return Zero.Sub(d) }
 
-// Mul returns d * e (= d.raw * e.raw / scale). Panics on overflow.
+// Mul returns d * e (= d.raw * e.raw / scale, truncated toward zero). Panics
+// on overflow.
+//
+// TODO(perf): big.Int intermediate allocates; replace with allocation-free
+// 256-bit limb math (math/bits) before this is used in the matching hot path
+// — see PLAN.md §9.7. Benchmark first.
 func (d Decimal) Mul(e Decimal) Decimal {
 	p := new(big.Int).Mul(d.toBig(), e.toBig())
 	p.Quo(p, scaleBig) // truncate toward zero
 	return fromBig(p)
 }
 
-// Div returns d / e (= d.raw * scale / e.raw). Panics on division by zero or overflow.
+// Div returns d / e (= d.raw * scale / e.raw, truncated toward zero). Panics
+// on division by zero or overflow.
+//
+// TODO(perf): see Mul — replace the big.Int intermediate with limb math.
 func (d Decimal) Div(e Decimal) Decimal {
 	if e.IsZero() {
 		panic("decimal: division by zero")
@@ -259,8 +287,10 @@ func (d Decimal) Div(e Decimal) Decimal {
 	return fromBig(n)
 }
 
-// MulFloat scales d by a float64 factor (lossy). For non-exact edge scaling
-// such as the RTR convergence fraction; not for authoritative values.
+// MulFloat scales d by a float64 factor (doubly lossy: d→float64 then the
+// product→Decimal). For non-exact edge scaling such as the RTR convergence
+// fraction; not for authoritative values. Panics if d is large enough that
+// d.Float64()*f overflows the 128-bit range, so keep operands modest.
 func (d Decimal) MulFloat(f float64) Decimal { return FromFloat(d.Float64() * f) }
 
 // Abs returns |d|.

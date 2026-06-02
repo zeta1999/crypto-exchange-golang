@@ -2,6 +2,7 @@ package decimal
 
 import (
 	"encoding/json"
+	"math"
 	"math/big"
 	"math/rand"
 	"testing"
@@ -183,6 +184,42 @@ func TestJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal([]byte(`0.5`), &got); err != nil || got != MustParse("0.5") {
 		t.Errorf("bare number unmarshal: %v err=%v", got, err)
 	}
+}
+
+func TestUnmarshalJSONRobustness(t *testing.T) {
+	var d Decimal
+	// One-sided / malformed quotes must error, not silently parse.
+	for _, bad := range []string{`"5`, `5"`, `"1.2.3"`, `"abc"`, `1e3`} {
+		if err := d.UnmarshalJSON([]byte(bad)); err == nil {
+			t.Errorf("UnmarshalJSON(%s) should error", bad)
+		}
+	}
+	// null leaves the value unchanged.
+	d = MustParse("7")
+	if err := d.UnmarshalJSON([]byte("null")); err != nil || d != MustParse("7") {
+		t.Errorf("null handling: d=%v err=%v", d, err)
+	}
+	// Quoted and bare both parse.
+	if err := d.UnmarshalJSON([]byte(`"1.25"`)); err != nil || d != MustParse("1.25") {
+		t.Errorf("quoted: d=%v err=%v", d, err)
+	}
+	if err := d.UnmarshalJSON([]byte(`2.5`)); err != nil || d != MustParse("2.5") {
+		t.Errorf("bare: d=%v err=%v", d, err)
+	}
+}
+
+func TestFromFloatNonFinitePanics(t *testing.T) {
+	mustPanic := func(name string, f func()) {
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s: expected panic", name)
+			}
+		}()
+		f()
+	}
+	mustPanic("NaN", func() { FromFloat(math.NaN()) })
+	mustPanic("+Inf", func() { FromFloat(math.Inf(1)) })
+	mustPanic("-Inf", func() { FromFloat(math.Inf(-1)) })
 }
 
 func TestUsableAsMapKey(t *testing.T) {
