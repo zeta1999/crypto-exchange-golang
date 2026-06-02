@@ -252,3 +252,19 @@ func TestRunRespectsCancellation(t *testing.T) {
 		t.Fatalf("t=0 event should have fired (offset 5), got %v", got)
 	}
 }
+
+func TestParseScenarioRejectsOverflowAtMs(t *testing.T) {
+	_, err := ParseScenario(strings.NewReader(
+		`{"at_ms": 9223372036854775807, "action": "price_shift", "params": {"offset_bps": 1}}`), 1)
+	if err == nil {
+		t.Error("huge at_ms should be rejected (overflow guard)")
+	}
+}
+
+func TestParseScenarioRejectsTrailingData(t *testing.T) {
+	_, err := ParseScenario(strings.NewReader(
+		`{"at_ms":0,"action":"latency","params":{}} {"at_ms":1,"action":"latency","params":{}}`), 1)
+	if err == nil {
+		t.Error("two objects on one line should be rejected")
+	}
+}

@@ -21,11 +21,14 @@ import (
 //
 // Format: JSONL (one JSON object per line). Lines that are blank or begin with
 // '#' (after leading whitespace) are skipped, so a scenario can be commented.
-// Each object is an Action:
+// Each object is an Action. Comments must be on their own line (a leading
+// '#'); trailing data after an object on the same line is rejected.
 //
+//	# open a +15bp cross-venue dislocation
 //	{"at_ms": 0,     "action": "price_shift", "params": {"offset_bps": 15, "scale": 1.0}}
 //	{"at_ms": 5000,  "action": "latency",     "params": {"feed_to_book_ms": 50, "jitter_ms": 10}}
-//	{"at_ms": 10000, "action": "price_shift", "params": {"offset_bps": 0}}  # close the dislocation
+//	# close the dislocation
+//	{"at_ms": 10000, "action": "price_shift", "params": {"offset_bps": 0}}
 //
 // The schedule is a pure function of (start, at_ms, speed): event i fires at
 // start + at_ms_i/speed, so a run is reproducible bit-for-bit given the same
@@ -36,6 +39,10 @@ import (
 const (
 	actionPriceShift = "price_shift"
 	actionLatency    = "latency"
+
+	// maxAtMs caps an event offset at ~1 year, well below the int64-nanosecond
+	// overflow of time.Duration(at_ms)*time.Millisecond.
+	maxAtMs = int64(365 * 24 * 60 * 60 * 1000)
 )
 
 // Action is one timed scenario event. AtMs is the offset from the scenario
@@ -129,8 +136,19 @@ func parseAction(raw []byte) (Action, error) {
 	if err := dec.Decode(&env); err != nil {
 		return Action{}, fmt.Errorf("malformed JSON: %w", err)
 	}
+	// Reject trailing data after the first object — one action per line.
+	// Without this, json.Decoder silently ignores anything after the first value.
+	if dec.More() {
+		return Action{}, fmt.Errorf("unexpected trailing data after action object (one action per line)")
+	}
 	if env.AtMs < 0 {
 		return Action{}, fmt.Errorf("at_ms must be >= 0, got %d", env.AtMs)
+	}
+	// Bound at_ms below the overflow point of time.Duration(at_ms)*time.Millisecond
+	// so a typo'd giant timestamp fails loudly instead of wrapping negative and
+	// firing immediately.
+	if env.AtMs > maxAtMs {
+		return Action{}, fmt.Errorf("at_ms %d exceeds maximum %d ms", env.AtMs, maxAtMs)
 	}
 
 	a := Action{AtMs: env.AtMs, Action: env.Action}
