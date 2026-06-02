@@ -187,6 +187,14 @@ func main() {
 		ccfg := cfg.API.Coinbase
 		products := coinbase.NewProducts(ccfg.Products)
 		authn := coinbase.NewAuthenticator(ccfg.APIKey, ccfg.Secret, ccfg.Passphrase, nil)
+		if ccfg.JWTPublicKey != "" {
+			v, err := coinbase.NewJWTVerifier(ccfg.JWTPublicKey, ccfg.JWTKeyName, nil)
+			if err != nil {
+				log.Fatalf("coinbase JWT verifier: %v", err)
+			}
+			authn.WithJWT(v)
+			log.Printf("Coinbase edge: ES256 JWT auth enabled")
+		}
 		registry := coinbase.NewRegistry(nil)
 		opts := []coinbase.Option{coinbase.WithMetrics(coinbase.NewMetrics(reg))}
 		if ccfg.RatePerSec > 0 {

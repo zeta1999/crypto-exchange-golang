@@ -90,19 +90,23 @@ type SymbolPair struct {
 
 // CoinbaseConfig configures the Coinbase-Advanced-Trade-compatible REST edge
 // (PLAN Phase 9, a documented SUBSET). Disabled by default. APIKey/Secret/
-// Passphrase are the credentials a client must present (legacy Coinbase
-// Exchange HMAC-SHA256 signing; JWT/ES256 is deferred). Products is the
-// allow-list of product IDs to serve; Coinbase product IDs ("BTC-USD") are
-// identical to engine instruments.
+// Passphrase are the legacy Coinbase Exchange HMAC-SHA256 credentials.
+// Additionally, when JWTPublicKey (a PEM-encoded EC P-256 public key) is set,
+// the edge accepts the production Advanced Trade ES256 JWT auth: a Bearer token
+// (REST) or the subscribe `jwt` field (WS) is verified against that key.
+// JWTKeyName, if set, is the expected JWT sub/kid. Products is the allow-list
+// of product IDs; Coinbase product IDs ("BTC-USD") equal engine instruments.
 type CoinbaseConfig struct {
-	Enabled    bool     `yaml:"enabled"`
-	Listen     string   `yaml:"listen"`
-	APIKey     string   `yaml:"api_key"`
-	Secret     string   `yaml:"secret"`
-	Passphrase string   `yaml:"passphrase"`
-	Products   []string `yaml:"products"`
-	RatePerSec float64  `yaml:"rate_per_sec"` // token-bucket refill; <=0 disables
-	Burst      int      `yaml:"burst"`        // bucket capacity
+	Enabled      bool     `yaml:"enabled"`
+	Listen       string   `yaml:"listen"`
+	APIKey       string   `yaml:"api_key"`
+	Secret       string   `yaml:"secret"`
+	Passphrase   string   `yaml:"passphrase"`
+	JWTPublicKey string   `yaml:"jwt_public_key"` // PEM EC P-256 public key; enables ES256 JWT auth
+	JWTKeyName   string   `yaml:"jwt_key_name"`   // expected JWT sub/kid ("" = don't check)
+	Products     []string `yaml:"products"`
+	RatePerSec   float64  `yaml:"rate_per_sec"` // token-bucket refill; <=0 disables
+	Burst        int      `yaml:"burst"`        // bucket capacity
 }
 
 // Emulator configures live-venue mirroring (feed → reference book → seeded

@@ -284,6 +284,13 @@ func (s *Server) handleUserSub(c *wsConn, msg *subscribeMsg, sub bool) {
 // API key is configured (empty), authentication is disabled and any user
 // subscribe is accepted.
 func (s *Server) authWS(msg *subscribeMsg) bool {
+	// Production scheme: the subscribe carries an ES256 JWT. If a verifier is
+	// configured, accept the user channel iff the jwt verifies.
+	if msg.JWT != "" {
+		if ok, err := s.auth.VerifyJWT(msg.JWT); ok {
+			return err == nil
+		}
+	}
 	want := s.auth.APIKeyString()
 	if want == "" {
 		return true

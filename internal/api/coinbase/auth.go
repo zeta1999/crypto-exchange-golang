@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -30,8 +31,10 @@ const authWindow = 30 * time.Second
 // base64-decoding it and fall back to the raw bytes if that fails, so a plain
 // configured secret also works.
 //
-// Production Advanced Trade JWT (ES256) auth is DEFERRED — it would require the
-// client's EC public key, which the emulator does not provision.
+// Production Advanced Trade JWT (ES256) auth is also supported when a JWT
+// verifier is configured (see WithJWT): a request bearing an Authorization:
+// Bearer <jwt> header is verified against the configured EC public key instead
+// of the HMAC scheme. Clients thus authenticate with either scheme.
 //
 // The clock is injected (now) so verification is deterministic in tests.
 type Authenticator struct {
@@ -39,6 +42,23 @@ type Authenticator struct {
 	secret     []byte
 	passphrase string
 	now        func() time.Time
+	jwt        *JWTVerifier // optional ES256 JWT verifier (nil = HMAC only)
+}
+
+// WithJWT attaches an ES256 JWT verifier; a Bearer token is then accepted in
+// place of the CB-ACCESS HMAC headers.
+func (a *Authenticator) WithJWT(v *JWTVerifier) *Authenticator {
+	a.jwt = v
+	return a
+}
+
+// VerifyJWT reports whether a raw JWT (e.g. from a WS subscribe message) is
+// valid. ok=false if no JWT verifier is configured.
+func (a *Authenticator) VerifyJWT(token string) (ok bool, err error) {
+	if a.jwt == nil {
+		return false, nil
+	}
+	return true, a.jwt.Verify(token)
 }
 
 // NewAuthenticator returns an Authenticator for the given key/secret/passphrase.
@@ -81,6 +101,18 @@ func decodeSecret(secret string) []byte {
 // need the body afterwards must restore r.Body (the handlers re-read via a
 // buffered copy).
 func (a *Authenticator) Verify(r *http.Request, body []byte) error {
+	// Advanced Trade JWT (ES256): a Bearer token is verified against the
+	// configured EC public key instead of the HMAC headers. A verification
+	// failure is an auth error (401), not an internal error (500).
+	if a.jwt != nil {
+		if tok, ok := bearerToken(r); ok {
+			if err := a.jwt.Verify(tok); err != nil {
+				return errUnauthorizedf("invalid jwt: " + err.Error())
+			}
+			return nil
+		}
+	}
+
 	key := r.Header.Get("CB-ACCESS-KEY")
 	if key == "" {
 		return errUnauthorizedf("missing CB-ACCESS-KEY")
@@ -141,6 +173,16 @@ func (a *Authenticator) checkTimestamp(tsStr string) error {
 		return errUnauthorizedf("request timestamp expired")
 	}
 	return nil
+}
+
+// bearerToken extracts a JWT from an "Authorization: Bearer <token>" header.
+func bearerToken(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if len(h) > len(prefix) && strings.EqualFold(h[:len(prefix)], prefix) {
+		return strings.TrimSpace(h[len(prefix):]), true
+	}
+	return "", false
 }
 
 // requestPath returns the path plus raw query string exactly as it appears on
