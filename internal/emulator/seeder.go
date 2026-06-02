@@ -1,11 +1,16 @@
 // Package emulator mirrors a live reference order book into the real
 // matching engine, so user orders trade against live-like liquidity.
 //
-// The Seeder (Phase 3) maps each reference price level to one tagged
-// synthetic resting limit order in the engine and reconciles that set on a
-// cadence — adding new levels, resizing changed ones, and cancelling levels
-// that left the reference. Later phases layer return-to-reference (Phase 4),
-// trade replay (Phase 5), and toxicity (Phase 6) on top of this anchor.
+// The Seeder maps each reference price level to one tagged synthetic resting
+// limit order in the engine. Converge(alpha) aligns that set with the
+// reference, moving each level a fraction alpha of the way toward its target:
+// alpha=1 is an exact reconcile (Phase 3), while alpha<1 is the progressive
+// return-to-reference of Phase 4 (driven by the RTR controller in rtr.go).
+//
+// The seeder accounts for fills: when a user trade eats a synthetic order
+// (reported via OnTrade from an engine hook), the level's tracked volume
+// shrinks, so the next Converge tops it back up toward the reference. Trade
+// replay (Phase 5) and toxicity (Phase 6) layer on top of this anchor.
 package emulator
 
 import (
@@ -13,13 +18,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/reference"
 )
+
+// volEps is the volume below which a level is treated as empty, and the
+// threshold for "unchanged" volume — avoids float-equality churn.
+const volEps = 1e-9
 
 // MetadataKey/MetadataValue tag engine orders the seeder owns, so other
 // layers (RTR, toxicity, API) can distinguish synthetic liquidity from real
@@ -48,14 +59,12 @@ type Config struct {
 
 // Seeder reconciles one instrument's engine liquidity against a reference book.
 //
-// Scope note: the placed map is the seeder's record of the synthetic orders
-// it owns, and Reconcile assumes the seeder is their sole mutator. That holds
-// in Phase 3 (no user flow). When user trades begin filling synthetic orders
-// (Phase 4/5), a resting order's volume can shrink or disappear underneath
-// this map; Reconcile already tolerates a vanished order (cancelling a
-// not-found order is a no-op), but topping a partially-eaten level back to its
-// reference size is deferred to the Phase 4 return-to-reference controller,
-// which will own fill accounting.
+// The placed map is the seeder's record of the synthetic orders it owns. User
+// trades that fill those orders are reported through OnTrade into a separate
+// fills buffer (guarded by its own lock so the hook never contends with — or
+// deadlocks against — a Converge pass), and folded into placed at the start of
+// each Converge. The seeder is the sole *placer* of synthetic orders; cancels
+// tolerate an order that was already filled away.
 type Seeder struct {
 	matcher Matcher
 	ref     *reference.Book
@@ -63,6 +72,9 @@ type Seeder struct {
 
 	mu     sync.Mutex
 	placed map[string]synthOrder // levelKey -> resting synthetic order
+
+	fillMu sync.Mutex
+	fills  map[string]float64 // levelKey -> volume filled since last Converge
 }
 
 type synthOrder struct {
@@ -88,6 +100,7 @@ func NewSeeder(matcher Matcher, ref *reference.Book, cfg Config) *Seeder {
 		ref:     ref,
 		cfg:     cfg,
 		placed:  make(map[string]synthOrder),
+		fills:   make(map[string]float64),
 	}
 }
 
@@ -97,92 +110,175 @@ func priceKey(side orderbook.Side, price float64) string {
 	return string(side) + ":" + strconv.FormatFloat(price, 'f', -1, 64)
 }
 
+func (s *Seeder) idPrefix() string { return "synth:" + s.cfg.Instrument + ":" }
+
 func (s *Seeder) synthID(side orderbook.Side, price float64) string {
-	return "synth:" + s.cfg.Instrument + ":" + priceKey(side, price)
+	return s.idPrefix() + priceKey(side, price)
 }
 
-// Reconcile makes one pass to align the engine's synthetic liquidity with the
-// current reference book. Cancellations run before placements so the book is
-// never transiently crossed by a stale order. It is safe to call repeatedly;
-// an unchanged reference produces a no-op pass.
+// OnTrade records a fill against a synthetic order. Wire it to the order
+// book's "trade" hook. It writes only to the fills buffer under its own lock,
+// so it never blocks on (or deadlocks with) an in-flight Converge.
+func (s *Seeder) OnTrade(t *orderbook.Trade) {
+	if t == nil || t.Instrument != s.cfg.Instrument {
+		return
+	}
+	prefix := s.idPrefix()
+	for _, id := range [...]string{t.BuyOrderID, t.SellOrderID} {
+		if !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		k := strings.TrimPrefix(id, prefix)
+		s.fillMu.Lock()
+		s.fills[k] += t.Volume
+		s.fillMu.Unlock()
+	}
+}
+
+// Reconcile aligns the engine exactly with the reference in one pass
+// (equivalent to Converge with alpha=1).
 func (s *Seeder) Reconcile(ctx context.Context) (Stats, error) {
+	return s.Converge(ctx, 1.0)
+}
+
+// Converge moves the engine's synthetic liquidity a fraction alpha toward the
+// reference book and returns what changed. For each level the new target is
+//
+//	target = current + alpha*(reference - current)
+//
+// (stale levels not in the reference decay toward zero), so alpha=1 snaps to
+// the reference and 0<alpha<1 approaches it geometrically over repeated calls
+// — the return-to-reference behavior. Pending fills are folded in first, so a
+// user-eaten level is topped back up. Levels already at their target are left
+// untouched (no churn, preserved queue priority). Cancellations precede
+// placements; combined with the uncrossed-reference guard, a placement can
+// never cross a surviving synthetic order, so synthetic self-trades don't
+// occur (asserted in tests).
+func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
+	alpha = math.Max(0, math.Min(1, alpha))
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var st Stats
-	// Never mirror a book we can't trust: an uninitialized book has no
-	// liquidity yet, and a crossed book would seed self-crossing orders.
 	if !s.ref.Initialized() || s.ref.Crossed() {
 		st.Skipped = true
 		return st, nil
 	}
+	s.foldFillsLocked()
 
 	bids, asks := s.ref.Depth(s.cfg.DepthLevels)
-	desired := make(map[string]synthOrder, len(bids)+len(asks))
+	refVol := make(map[string]float64, len(bids)+len(asks))
+	meta := make(map[string]synthOrder, len(bids)+len(asks))
 	for _, l := range bids {
 		k := priceKey(orderbook.SideBuy, l.Price)
-		desired[k] = synthOrder{id: s.synthID(orderbook.SideBuy, l.Price), side: orderbook.SideBuy, price: l.Price, volume: l.Quantity}
+		refVol[k] = l.Quantity
+		meta[k] = synthOrder{id: s.synthID(orderbook.SideBuy, l.Price), side: orderbook.SideBuy, price: l.Price}
 	}
 	for _, l := range asks {
 		k := priceKey(orderbook.SideSell, l.Price)
-		desired[k] = synthOrder{id: s.synthID(orderbook.SideSell, l.Price), side: orderbook.SideSell, price: l.Price, volume: l.Quantity}
+		refVol[k] = l.Quantity
+		meta[k] = synthOrder{id: s.synthID(orderbook.SideSell, l.Price), side: orderbook.SideSell, price: l.Price}
 	}
 
-	// Pass 1: cancel levels that are gone or whose volume changed. A changed
-	// level is re-placed in pass 2; we remember it so it counts as a resize,
-	// not a fresh placement.
-	resized := make(map[string]bool)
+	// Compute the per-level target over the union of placed and reference
+	// levels. Stale levels (placed but absent from the reference) target zero.
+	type plan struct {
+		o       synthOrder
+		cur     float64
+		target  float64
+		existed bool
+	}
+	plans := make(map[string]plan, len(refVol)+len(s.placed))
+	for k, want := range meta {
+		cur, existed := s.placed[k]
+		var c float64
+		if existed {
+			c = cur.volume
+			want.id, want.side, want.price = cur.id, cur.side, cur.price
+		}
+		plans[k] = plan{o: want, cur: c, target: c + alpha*(refVol[k]-c), existed: existed}
+	}
 	for k, cur := range s.placed {
-		want, ok := desired[k]
-		if ok && want.volume == cur.volume {
-			continue // unchanged; leave the resting order in place
+		if _, ok := refVol[k]; ok {
+			continue // already planned above
 		}
-		// A not-found order is already in the desired post-cancel state (it
-		// was filled or cancelled out from under us), so treat that as
-		// success and proceed; any other error is real.
-		if _, err := s.matcher.CancelOrder(ctx, s.cfg.Instrument, cur.id); err != nil && !errors.Is(err, orderbook.ErrOrderNotFound) {
-			return st, fmt.Errorf("cancel %s: %w", cur.id, err)
-		}
-		delete(s.placed, k)
-		if ok {
-			resized[k] = true
-			st.Resized++
-		} else {
-			st.Cancelled++
-		}
+		plans[k] = plan{o: cur, cur: cur.volume, target: cur.volume * (1 - alpha), existed: true}
 	}
 
-	// Pass 2: place new and resized levels.
-	for k, want := range desired {
-		if _, ok := s.placed[k]; ok {
-			continue // already resting at the right volume
+	// Pass 1: cancel everything that must change (removed, drained, or
+	// resized). A not-found order was already filled/cancelled away — benign.
+	apply := make([]plan, 0, len(plans))
+	for k, p := range plans {
+		if p.existed && math.Abs(p.target-p.cur) <= volEps {
+			continue // already at target; leave the resting order in place
 		}
+		if p.existed {
+			if _, err := s.matcher.CancelOrder(ctx, s.cfg.Instrument, p.o.id); err != nil && !errors.Is(err, orderbook.ErrOrderNotFound) {
+				return st, fmt.Errorf("cancel %s: %w", p.o.id, err)
+			}
+			delete(s.placed, k)
+		}
+		if p.target <= volEps {
+			if p.existed {
+				st.Cancelled++
+			}
+			continue // nothing to (re-)place
+		}
+		apply = append(apply, p)
+	}
+
+	// Pass 2: place new/resized levels at their target volume.
+	for _, p := range apply {
 		ord := &orderbook.Order{
-			ID:         want.id,
+			ID:         p.o.id,
 			Instrument: s.cfg.Instrument,
-			Price:      want.price,
-			Volume:     want.volume,
-			Side:       want.side,
+			Price:      p.o.price,
+			Volume:     p.target,
+			Side:       p.o.side,
 			Metadata:   map[string]string{MetadataKey: MetadataValue},
 		}
 		trades, _, err := s.matcher.PlaceLimit(ctx, ord)
 		if err != nil {
-			return st, fmt.Errorf("place %s: %w", want.id, err)
+			return st, fmt.Errorf("place %s: %w", p.o.id, err)
 		}
 		var filled float64
 		for _, t := range trades {
 			filled += t.Volume
 		}
 		st.Trades += len(trades)
-		if rested := want.volume - filled; rested > 0 {
-			want.volume = rested
-			s.placed[k] = want
-			if !resized[k] { // resizes already counted in pass 1
-				st.Placed++
-			}
+		rested := p.target - filled
+		if rested > volEps {
+			p.o.volume = rested
+			s.placed[priceKey(p.o.side, p.o.price)] = p.o
+		}
+		if p.existed {
+			st.Resized++
+		} else {
+			st.Placed++
 		}
 	}
 	return st, nil
+}
+
+// foldFillsLocked applies buffered fills to the placed volumes. Caller holds s.mu.
+func (s *Seeder) foldFillsLocked() {
+	s.fillMu.Lock()
+	fills := s.fills
+	s.fills = make(map[string]float64)
+	s.fillMu.Unlock()
+	for k, v := range fills {
+		cur, ok := s.placed[k]
+		if !ok {
+			continue
+		}
+		cur.volume -= v
+		if cur.volume <= volEps {
+			delete(s.placed, k)
+		} else {
+			s.placed[k] = cur
+		}
+	}
 }
 
 // SyntheticCount returns how many synthetic orders the seeder currently
