@@ -37,6 +37,12 @@ const (
 	MetadataValue = "true"
 )
 
+// convergeEps: a per-level volume difference at or below this counts as "at
+// target". Convergence applies a float alpha via MulFloat, so a near-converged
+// level would otherwise emit sub-realistic femto-volume cancel/replace churn
+// every tick until the geometric step underflows; this settles it instead.
+var convergeEps = decimal.MustParse("0.000000001") // 1e-9
+
 // Matcher is the slice of the matching engine the seeder drives. *engine.Engine
 // satisfies it; tests can substitute a fake.
 type Matcher interface {
@@ -217,10 +223,13 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 		if existed {
 			c, curID = cur.volume, cur.id
 		}
-		// target = c + alpha*(ref - c). alpha is the float convergence
-		// fraction from the RTR controller; the step itself is lossy edge
-		// scaling (MulFloat), which is exactly the intended use.
-		target := c.Add(refVol[k].Sub(c).MulFloat(alpha))
+		// target = c + alpha*(ref - c). alpha=1 snaps exactly to the reference
+		// (Reconcile must be exact); 0<alpha<1 is the lossy MulFloat edge
+		// scaling from the RTR controller, which is exactly its intended use.
+		target := refVol[k]
+		if alpha < 1 {
+			target = c.Add(refVol[k].Sub(c).MulFloat(alpha))
+		}
 		plans[k] = plan{key: k, side: side[k], price: price[k], target: target, existed: existed, curID: curID}
 	}
 	for k, cur := range s.placed {
@@ -240,8 +249,8 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 	apply := make([]plan, 0, len(plans))
 	for k, p := range plans {
 		cur := s.placed[k]
-		if p.existed && p.target.Eq(cur.volume) {
-			continue // already at target; leave the resting order in place
+		if p.existed && p.target.Sub(cur.volume).Abs().Lte(convergeEps) {
+			continue // within tolerance of target; leave the resting order in place
 		}
 		if p.existed {
 			if _, err := s.matcher.CancelOrder(ctx, s.cfg.Instrument, p.curID); err != nil && !errors.Is(err, orderbook.ErrOrderNotFound) {
