@@ -82,6 +82,7 @@ type OrderBook struct {
 	mu          sync.RWMutex
 	instruments map[string]*instrumentBook
 	hooks       []Hook
+	now         func() time.Time // clock for trade timestamps; injectable for determinism
 }
 
 // New creates an order book supporting the provided instruments.
@@ -90,7 +91,17 @@ func New(instruments []string) *OrderBook {
 	for _, symbol := range instruments {
 		inst[symbol] = &instrumentBook{}
 	}
-	return &OrderBook{instruments: inst}
+	return &OrderBook{instruments: inst, now: time.Now}
+}
+
+// SetClock overrides the timestamp source for trades (Trade.ExecutedAt). The
+// default is time.Now; injecting a deterministic clock makes a replay/scenario
+// run reproducible bit-for-bit (the golden tests rely on this). Call before
+// processing orders, not concurrently with it.
+func (b *OrderBook) SetClock(now func() time.Time) {
+	if now != nil {
+		b.now = now
+	}
 }
 
 // RegisterHook adds a callback triggered for every execution or trigger.
@@ -124,7 +135,7 @@ func (b *OrderBook) AddLimitOrder(ord *Order) ([]*Trade, error) {
 		return nil, nil
 	}
 
-	trades := book.matchLocked(ord)
+	trades := book.matchLocked(ord, b.now)
 	if ord.Volume.Sign() > 0 && !ord.IsMarket {
 		book.enqueueLocked(ord)
 	}
@@ -155,7 +166,7 @@ func (b *OrderBook) ExecuteLimitIOC(ord *Order) ([]*Trade, error) {
 	if ord.Volume.Sign() <= 0 {
 		return nil, nil
 	}
-	trades := book.matchLocked(ord) // matches under the price cap; never enqueues
+	trades := book.matchLocked(ord, b.now) // matches under the price cap; never enqueues
 	for _, t := range trades {
 		b.fire("trade", t)
 	}
@@ -221,7 +232,7 @@ func (b *instrumentBook) enqueueLocked(ord *Order) {
 	}
 }
 
-func (b *instrumentBook) matchLocked(incoming *Order) []*Trade {
+func (b *instrumentBook) matchLocked(incoming *Order, now func() time.Time) []*Trade {
 	var trades []*Trade
 	var queue *[]*Order
 	if incoming.Side == SideBuy {
@@ -249,7 +260,7 @@ func (b *instrumentBook) matchLocked(incoming *Order) []*Trade {
 			Price:      resting.Price,
 			Volume:     traded,
 			TakerSide:  incoming.Side,
-			ExecutedAt: time.Now().UTC(),
+			ExecutedAt: now().UTC(),
 		}
 		if incoming.Side == SideBuy {
 			trade.BuyOrderID = incoming.ID

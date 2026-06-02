@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -266,6 +267,13 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 		}
 		apply = append(apply, p)
 	}
+
+	// Place in a deterministic (sorted-by-level-key) order: pass 1 collected
+	// from a Go map, whose iteration order is randomized, but pass 2 mints a
+	// monotonic generation ID per placement — so an unsorted order would assign
+	// non-reproducible synthetic order IDs run-to-run. Sorting makes a
+	// replay/scenario reproducible bit-for-bit (asserted by the golden test).
+	sort.Slice(apply, func(i, j int) bool { return apply[i].key < apply[j].key })
 
 	// Pass 2: place new/resized levels at their target volume with a fresh
 	// generation ID. The tracked volume is the intended target; any fill
