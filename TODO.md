@@ -100,11 +100,13 @@ fix → CI → manual TESTING subagent → iterate until clean.
       depth/trades + user data; diff responses vs the real venue's documented shapes.
 
 ## Phase 8 — Binance-compatible API
-- [ ] `internal/api/binance/rest.go`: order, openOrders, depth, ticker, account
-- [ ] HMAC-SHA256 signature emulation + timestamp/recvWindow
-- [ ] `internal/api/binance/ws.go`: market streams + user-data (executionReport)
-- [ ] symbol/precision mapping
-- [ ] latency injection (Phase 7) applied at this edge
+- [x] `internal/api/binance/rest.go`: order POST/DELETE, openOrders, depth, ticker, account (stub balances)
+- [x] HMAC-SHA256 signature emulation + timestamp/recvWindow (constant-time; -1022/-1021/-2014/-2015)
+- [x] symbol mapping (config BTCUSDT↔BTC-USD); registry w/ hook-driven fill tracking; wired behind config
+- [x] tests (23) + brutal review + fixes (panic guard, phantom-record rollback); live-verified signed order
+- [ ] `internal/api/binance/ws.go`: market streams + user-data (executionReport) — deferred
+- [ ] /exchangeInfo, per-symbol precision filters, real balances — deferred
+- [ ] latency injection (Phase 7) applied at this edge (order_ack/fill_report)
 - [ ] conformance: drive with CCXT / GoEx (endpoint-swapped); also `python-binance`/curl
 
 ## Phase 9 — Coinbase-compatible API

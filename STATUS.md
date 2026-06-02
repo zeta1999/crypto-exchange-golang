@@ -12,7 +12,9 @@ done & reviewed. Phase 7 core adds the artificial **price shift** (manufacture
 cross-venue arb dislocations) and **latency** injectors (config, wired,
 default-off, all reviewed). **Remaining Phase 7:** full trace replay, scenario
 scripting, cross-venue harness, order-ack/fill-report latency at API edges.
-**Next:** finish Phase 7 or Phases 8–9 (Binance/Coinbase-compatible APIs).
+**Phase 8** Binance-compatible REST edge done (signed order lifecycle, live-verified).
+**Next:** Phase 9 (Coinbase Advanced Trade REST edge, mirrors Phase 8), then WS streams
+for both, the Phase 7 tail, and Phase 11 hardening.
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -28,7 +30,7 @@ scripting, cross-venue harness, order-ack/fill-report latency at API edges.
 | 5 | Trade replay sync | ☑ | `internal/emulator.TapeReplay` injects tape via single-lock IOC (orderbook.ExecuteLimitIOC); resting user orders fill in sync at own price; wired into binary (per-instrument tape goroutines). CI green; live-verified; review applied (IOC, NaN guard). |
 | 6 | Configurable toxicity [b] | ☑ | `internal/toxicity` Kyle λ + VPIN; `emulator.ToxicInjector` seeded adverse sweep (scale·Score prob, scale·Impact ≤1 spread); config knobs wired; `scale:0`=pure RTR. CI green; review applied (bounded, guarded). |
 | 7 | Scenario & fault injection (test bed) | ◐ | price shift (`priceshift.go`, arb dislocation) + latency (`latency.go`) injectors done, wired, reviewed. Remaining: full trace replay, scenario scripting, cross-venue harness, ack/fill latency at API edges. |
-| 8 | Binance-compatible API | ☐ | REST + WS subset |
+| 8 | Binance-compatible API | ◐ | `internal/api/binance` REST subset (ping/time/depth/ticker + signed order/cancel/openOrders/account); HMAC-SHA256 auth; symbol map; order registry w/ hook fill tracking; wired behind `api.binance.enabled`. CI green; live-verified (signed order → ACK, bad sig → -1022); reviewed. WS + user-data streams deferred. |
 | 9 | Coinbase-compatible API | ☐ | Advanced Trade REST + WS subset |
 | 10 | Custody examples (stretch) | ☐ | XLM / Solana / ERC20, testnet only |
 | 11 | Hardening & observability | ☐ | metrics, scenario tests |
