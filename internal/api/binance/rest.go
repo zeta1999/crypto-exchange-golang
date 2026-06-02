@@ -289,6 +289,11 @@ func (s *Server) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		trades, _, err = s.engine.PlaceLimit(r.Context(), ord)
 	}
 	if err != nil {
+		// The order is recorded BEFORE placement so a synchronous fill hook
+		// (which fires inside PlaceLimit/PlaceMarket) isn't lost. If placement
+		// itself failed, no trade fired, so roll the record back — otherwise it
+		// lingers forever as a phantom NEW order in openOrders.
+		s.registry.Remove(rec.OrderID)
 		writeError(w, errInternal(err.Error()))
 		return
 	}
@@ -544,15 +549,14 @@ func parseSide(s string) (orderbook.Side, error) {
 // parseDecimalParam parses a Binance string/number quantity or price. It rejects
 // malformed and non-finite input.
 func parseDecimalParam(s, name string) (decimal.Decimal, error) {
+	// Parse the exact decimal string only. We deliberately do NOT fall back to
+	// strconv.ParseFloat: it accepts "NaN"/"Inf" (which panic decimal.FromFloat)
+	// and huge exponents (which overflow the 128-bit range and panic), turning
+	// trivially-crafted input into a handler panic. Binance clients send plain
+	// decimal strings, which decimal.Parse handles.
 	d, err := decimal.Parse(s)
 	if err != nil {
-		// Tolerate float-style values JSON clients may send (e.g. "1e-3" is not
-		// supported by decimal.Parse) by falling back through ParseFloat.
-		f, ferr := strconv.ParseFloat(s, 64)
-		if ferr != nil {
-			return decimal.Zero, errIllegalParam(name)
-		}
-		return decimal.FromFloat(f), nil
+		return decimal.Zero, errIllegalParam(name)
 	}
 	return d, nil
 }

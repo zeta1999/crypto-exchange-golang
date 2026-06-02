@@ -1,6 +1,7 @@
 package binance
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -208,7 +209,23 @@ func (r *Registry) OpenOrders(engineSymbol string) []orderRecord {
 		}
 		out = append(out, *rec)
 	}
+	// Deterministic order (by orderId, like Binance) — map iteration is random.
+	sort.Slice(out, func(i, j int) bool { return out[i].OrderID < out[j].OrderID })
 	return out
+}
+
+// Remove deletes a record from all indexes. Used to roll back an order that was
+// recorded before placement when the engine then rejected it.
+func (r *Registry) Remove(orderID int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.byOrderID[orderID]
+	if !ok {
+		return
+	}
+	delete(r.byOrderID, orderID)
+	delete(r.byEngine, rec.EngineID)
+	delete(r.byClient, rec.ClientOrderID)
 }
 
 // snapshot returns a value copy of the record under lock.
