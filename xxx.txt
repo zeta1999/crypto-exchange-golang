@@ -1,9 +1,0 @@
-
-Every remaining item now has real friction that needs your input or resources, not more momentum — pushing through them on autopilot
-  would produce worse work than they deserve:
-
-  - CCXT/GoEx conformance run (your earlier ask) and custody — need network/module access this sandbox doesn't have.
-  - fill-report latency, deterministic-clock golden tests, cross-venue arb harness — need design decisions / non-trivial refactors
-  (async WS delivery, injectable clock, two-engine topology), not quick edits.
-  - decimal Div limb-math — 256÷128 Knuth division, genuinely error-prone; Div is a rare path and stays on big.Int deliberately.
-  - Coinbase ES256 JWT — real key-handling design.

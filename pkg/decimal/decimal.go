@@ -6,9 +6,10 @@
 //
 // The 128-bit value is held as a two's-complement {hi int64, lo uint64} pair,
 // which keeps Decimal a comparable value type (usable directly as a map key).
-// Add/Sub use math/bits with signed-overflow detection; Mul/Div use big.Int
-// intermediates (a correct first cut — the hot paths can later move to
-// allocation-free limb math without changing this API).
+// All arithmetic is allocation-free: Add/Sub use math/bits with signed-overflow
+// detection; Mul does a 128×128→256 product then ÷scale in 64-bit limbs; Div
+// does |num|·scale then a 256÷128 binary long division. big.Int is used only at
+// the parse/format/bridging edges, never in arithmetic.
 package decimal
 
 import (

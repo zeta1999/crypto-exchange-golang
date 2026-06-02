@@ -301,3 +301,32 @@ func BenchmarkDiv(b *testing.B) {
 		_ = x.Div(y)
 	}
 }
+
+// TestDivExtremeBoundaries pins the asymmetric ±2^127 edges that random oracle
+// cases almost never hit: min is representable, but min/-1 = +2^127 overflows.
+func TestDivExtremeBoundaries(t *testing.T) {
+	maxRaw := FromRaw(math.MaxInt64, math.MaxUint64) // +2^127 - 1
+	minRaw := FromRaw(math.MinInt64, 0)              // -2^127
+	one := MustParse("1")                            // raw = scale (10^18)
+
+	// Divide-by-one round-trips the raw value exactly.
+	if got := maxRaw.Div(one); got != maxRaw {
+		t.Errorf("maxRaw/1 = %v, want maxRaw", got)
+	}
+	if got := minRaw.Div(one); got != minRaw {
+		t.Errorf("minRaw/1 = %v, want minRaw", got)
+	}
+	// min / -1 == +2^127, which is NOT representable → overflow panic.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("minRaw / -1 should overflow-panic (+2^127 unrepresentable)")
+			}
+		}()
+		minRaw.Div(MustParse("-1"))
+	}()
+	// Divisor magnitude > numerator magnitude → quotient 0.
+	if got := one.Div(maxRaw); !got.IsZero() {
+		t.Errorf("1/maxRaw = %v, want 0", got)
+	}
+}
