@@ -83,19 +83,32 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [ ] tests: zeroed controls = no-op; injected latency shows in ack/fill timestamps;
       seeded scenario reproduces bit-for-bit; arb scenario is exploitable then closes
 
+## Protocol compliance (cross-cutting, Phases 8–9)
+- [ ] Validate the Binance/Coinbase-compatible API edges against a **real exchange-client
+      library** pointed at the emulator with **only the endpoint/base-URL changed** — the
+      library is the conformance oracle (if a stock client trades against us unmodified, we're
+      compliant). Candidates:
+  - **CCXT** (JS/Python, `ccxt`) — broadest coverage; set `exchange.urls['api'] = <emulator>`.
+  - **GoEx / GoCryptoCurrencies** (Go, e.g. `github.com/nntaoli-project/goex`) — keeps the
+      test client in-repo/in-language; point its REST/WS base at the emulator.
+- [ ] Prefer an **unmodified** client (endpoint swap only); if a fork is unavoidable, vendor a
+      minimal copy and document exactly what changed (ideally just the base URL / TLS skip).
+- [ ] Use the chosen client to drive conformance tests: place/cancel/query orders, stream
+      depth/trades + user data; diff responses vs the real venue's documented shapes.
+
 ## Phase 8 — Binance-compatible API
 - [ ] `internal/api/binance/rest.go`: order, openOrders, depth, ticker, account
 - [ ] HMAC-SHA256 signature emulation + timestamp/recvWindow
 - [ ] `internal/api/binance/ws.go`: market streams + user-data (executionReport)
 - [ ] symbol/precision mapping
 - [ ] latency injection (Phase 7) applied at this edge
-- [ ] test with `python-binance`/curl
+- [ ] conformance: drive with CCXT / GoEx (endpoint-swapped); also `python-binance`/curl
 
 ## Phase 9 — Coinbase-compatible API
 - [ ] `internal/api/coinbase/rest.go`: create/cancel/list orders, product book, ticker
 - [ ] JWT/HMAC auth emulation
 - [ ] `internal/api/coinbase/ws.go`: level2, market_trades, user channels
-- [ ] test with Coinbase Advanced Trade client/curl
+- [ ] conformance: drive with CCXT / GoEx (endpoint-swapped); also Coinbase Advanced Trade client/curl
 
 ## Phase 10 — Custody examples (stretch, testnet only)
 - [ ] `internal/custody/chain.go`: `Chain` interface (address, deposits, withdraw)

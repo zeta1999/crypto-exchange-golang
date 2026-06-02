@@ -60,6 +60,10 @@ Set `emulator.enabled: false` for a plain offline matching engine.
   **artificial latency**, **artificial price shift** (manufacture cross-venue dislocations
   to test arbitrage / relative-value models). Phases renumbered 7→8…10→11.
 - 2026-06-02: Project codename **mirage** (README + logo); easily renamed.
+- 2026-06-02: **Protocol compliance via a real client library** (Phases 8–9): validate the
+  Binance/Coinbase-compatible edges by pointing a stock exchange-client — **CCXT** or **GoEx
+  (GoCryptoCurrencies)** — at the emulator with only the endpoint/base-URL changed. The
+  unmodified client is the conformance oracle; fork only if unavoidable and document the diff.
 - 2026-06-02: **Market prices & quantities use fixed-point ("fast") decimals**, not float64 —
   base-10, 18 fractional digits, signed 128-bit scaled storage, 256-bit mul/div intermediates;
   exact and bit-deterministic. Detailed Go design in PLAN.md §9 (`pkg/decimal`). Confirmed/locked;
