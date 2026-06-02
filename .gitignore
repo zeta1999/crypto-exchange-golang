@@ -1,0 +1,17 @@
+# Local code-intelligence index (machine-local, not shared)
+.codegraph/
+
+# Build artifacts
+/bin/
+/dist/
+
+# Runtime data (WAL, recorded feeds)
+/data/
+*.wal
+
+# Feed recordings / fixtures generated locally
+*.jsonl.tmp
+
+# OS / editor cruft
+.DS_Store
+*.swp
