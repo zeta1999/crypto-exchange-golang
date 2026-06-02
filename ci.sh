@@ -22,7 +22,10 @@ ok()   { printf "%s[ok]%s %s\n" "$GREEN" "$RESET" "$1"; }
 fail() { printf "%s[FAIL]%s %s\n" "$RED" "$RESET" "$1"; exit 1; }
 
 step "gofmt (formatting check)"
-unformatted=$(gofmt -l . 2>/dev/null | grep -v '/grpc/' || true)
+# Exclude generated protobuf under grpc/ by filtering the file list BEFORE gofmt,
+# so we never rely on grep's exit code (no-match => exit 1) under `set -e`/pipefail.
+gofmt_targets=$(find . -name '*.go' -not -path './grpc/*' -not -path './.codegraph/*')
+unformatted=$(gofmt -l $gofmt_targets 2>/dev/null)
 if [ -n "$unformatted" ]; then
   printf "These files are not gofmt-clean:\n%s\n" "$unformatted"
   fail "gofmt"
@@ -45,8 +48,8 @@ step "go build ./..."
 go build ./... || fail "go build"
 ok "build clean"
 
-step "go test ./... -race -count=1"
-go test ./... -race -count=1 || fail "go test"
+step "go test ./... -race -count=1 -timeout=120s"
+go test ./... -race -count=1 -timeout=120s || fail "go test"
 ok "tests pass"
 
 printf "\n%sCI PASSED%s\n" "$GREEN" "$RESET"

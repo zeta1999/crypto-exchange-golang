@@ -9,8 +9,8 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] Add `ci.sh` (gofmt check, go vet, golangci-lint if present, build, test -race)
 - [x] Add `Makefile` (`ci`, `run`, `test`, `lint`, `fmt`)
 - [x] Run baseline `./ci.sh`; record result in STATUS — **green** 2026-06-02
-- [ ] Commit Phase 0 (no push)
-- [ ] Brutal review subagent + fixes
+- [x] Commit Phase 0 (no push)
+- [x] Brutal review subagent + fixes (gofmt grep/pipefail bug, test -timeout, make lint mask, feedcat stub)
 
 ## Phase 1 — Feed ingestion layer
 - [ ] `internal/feed/types.go`: `Trade`, `LOBSnapshot`, `LOBLevel`, `Ticker`, `Event`

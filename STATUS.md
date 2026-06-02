@@ -3,7 +3,7 @@
 _Last updated: 2026-06-02_
 
 ## Current phase
-**Phase 0 — Foundations, CI, docs** (in progress)
+**Phase 0 — Foundations, CI, docs** (complete) → next: **Phase 1 — Feed ingestion**
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -11,7 +11,7 @@ _Last updated: 2026-06-02_
 ## Phase progress
 | # | Phase | State | Notes |
 |---|-------|-------|-------|
-| 0 | Foundations, CI, docs | ◐ | docs + `ci.sh` + Makefile added; baseline CI **green**; commit + review pending |
+| 0 | Foundations, CI, docs | ☑ | docs + `ci.sh` + Makefile committed; baseline CI **green**; brutal review done + fixes applied |
 | 1 | Feed ingestion layer | ☐ | Port Binance/Coinbase WS adapters from `../this-is-not-bbg` |
 | 2 | Reference book | ☐ | snapshot+diff per instrument |
 | 3 | Emulator seeding | ☐ | mirror reference liquidity as synthetic orders |
