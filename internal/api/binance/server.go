@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // Engine is the subset of the matching engine the Binance edge consumes.
@@ -132,15 +133,16 @@ func (s *Server) AttachHooks(book *orderbook.OrderBook) {
 				return
 			}
 			s.onBookTrade(t) // public @trade market stream
-			// executionReport for whichever side(s) belong to the Binance edge.
+			// executionReport for whichever side(s) belong to the Binance edge,
+			// carrying THIS trade's fill qty/price (Binance l/L).
 			for _, id := range []string{t.BuyOrderID, t.SellOrderID} {
 				if isEdgeOrder(id) {
-					s.emitExecutionReport(id, execTypeTrade)
+					s.emitExecutionReport(id, execTypeTrade, t.Volume, t.Price)
 				}
 			}
 		case "cancel":
 			if o, ok := data.(*orderbook.Order); ok && isEdgeOrder(o.ID) {
-				s.emitExecutionReport(o.ID, execTypeCanceled)
+				s.emitExecutionReport(o.ID, execTypeCanceled, decimal.Zero, decimal.Zero)
 			}
 		}
 	})

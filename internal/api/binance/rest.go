@@ -275,7 +275,7 @@ func (s *Server) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 	// Emit the NEW executionReport before placement so user-data subscribers see
 	// the order acknowledged ahead of any synchronous fill (TRADE) reports the
 	// book hook fires inside PlaceLimit/PlaceMarket.
-	s.emitExecutionReport(rec.EngineID, execTypeNew)
+	s.emitExecutionReport(rec.EngineID, execTypeNew, decimal.Zero, decimal.Zero)
 
 	ord := &orderbook.Order{
 		ID:         rec.EngineID,

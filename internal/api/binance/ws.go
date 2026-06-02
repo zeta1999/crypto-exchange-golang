@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // WS tuning. depthInterval is the partial-book push cadence (Binance's
@@ -162,8 +163,14 @@ func (s *Server) handleCombinedStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing streams", http.StatusBadRequest)
 		return
 	}
+	names := strings.Split(raw, "/")
+	// Bound attacker-controlled work before upgrade (Binance caps at 1024).
+	if len(names) > 1024 {
+		http.Error(w, "too many streams", http.StatusBadRequest)
+		return
+	}
 	var parsed []parsedStream
-	for _, name := range strings.Split(raw, "/") {
+	for _, name := range names {
 		if name == "" {
 			continue
 		}
@@ -464,13 +471,10 @@ func (s *Server) onBookTrade(t *orderbook.Trade) {
 	if !t.ExecutedAt.IsZero() {
 		tradeTime = t.ExecutedAt.UnixMilli()
 	}
-	// Buyer-is-maker (m) convention: orderbook.matchLocked prices every Trade at
-	// the RESTING (maker) order's price, but the Trade struct does not record
-	// which side was the aggressor (taker). Without that signal we cannot derive
-	// m faithfully, so we adopt a fixed, documented convention: m=false (buyer is
-	// the taker / sell side is the resting maker). This matches the common case
-	// in these flows, where a crossing/market BUY lifts resting asks.
-	buyerMaker := false
+	// Buyer-is-maker (m): the buyer is the maker exactly when the taker (the
+	// aggressing/incoming order) is the seller. matchLocked records the taker
+	// side on each Trade, so this is now exact rather than a fixed convention.
+	buyerMaker := t.TakerSide == orderbook.SideSell
 	ev := tradeEvent{
 		EventType: "trade",
 		EventTime: nowMs,
@@ -492,7 +496,7 @@ func (s *Server) onBookTrade(t *orderbook.Trade) {
 // the Binance "x" field (NEW/TRADE/CANCELED). It MUST be called after the
 // registry hook has folded the trade/cancel into the record (guaranteed by hook
 // registration order in AttachHooks).
-func (s *Server) emitExecutionReport(engineID, execType string) {
+func (s *Server) emitExecutionReport(engineID, execType string, lastFillQty, lastFillPrice decimal.Decimal) {
 	rec, ok := s.registry.getByEngine(engineID)
 	if !ok {
 		return
@@ -500,20 +504,12 @@ func (s *Server) emitExecutionReport(engineID, execType string) {
 	nowMs := s.now().UnixMilli()
 	lastQty := decimalZeroStr()
 	lastPrice := decimalZeroStr()
-	// On a TRADE we don't have the per-trade last-fill split from the record
-	// alone; report cumulative for z and leave l/L as the executed delta is not
-	// tracked. For the emulator we set l=executedQty when status just became
-	// terminal-ish; simpler and faithful enough: report l=z on fills.
 	if execType == execTypeTrade {
-		lastQty = rec.ExecutedQty.StringPrec(qtyPrec)
-		lastPrice = rec.Price.StringPrec(pricePrec)
-		if rec.Type == "MARKET" {
-			// Market orders may have no resting price; use cum quote / qty as a
-			// representative last price when available.
-			if rec.ExecutedQty.Sign() > 0 {
-				lastPrice = rec.CummulativeQuoteQty.Div(rec.ExecutedQty).StringPrec(pricePrec)
-			}
-		}
+		// l/L are the quantity and price of THIS fill (Binance semantics); z
+		// carries the cumulative. The per-trade values come straight from the
+		// order book "trade" event, so they're exact per execution.
+		lastQty = lastFillQty.StringPrec(qtyPrec)
+		lastPrice = lastFillPrice.StringPrec(pricePrec)
 	}
 	ev := executionReport{
 		EventType:       "executionReport",

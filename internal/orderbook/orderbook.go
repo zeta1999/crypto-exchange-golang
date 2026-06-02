@@ -35,7 +35,11 @@ type Trade struct {
 	Instrument  string
 	Price       decimal.Decimal
 	Volume      decimal.Decimal
-	ExecutedAt  time.Time
+	// TakerSide is the side of the aggressing (incoming) order. It lets edges
+	// report the correct "buyer is maker" flag: the buyer is the maker exactly
+	// when the taker is the seller.
+	TakerSide  Side
+	ExecutedAt time.Time
 }
 
 // Snapshot aggregates the visible state of the book for GUIs or monitoring.
@@ -244,6 +248,7 @@ func (b *instrumentBook) matchLocked(incoming *Order) []*Trade {
 			Instrument: incoming.Instrument,
 			Price:      resting.Price,
 			Volume:     traded,
+			TakerSide:  incoming.Side,
 			ExecutedAt: time.Now().UTC(),
 		}
 		if incoming.Side == SideBuy {
