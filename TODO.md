@@ -32,12 +32,16 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] brutal review subagent + fixes (seq-design C1, key-collapse H2, crossed-book H3)
 
 ## Phase 3 — Emulator seeding
-- [ ] `internal/emulator/seeder.go`: reference levels → synthetic resting orders (tagged)
-- [ ] reconcile loop (add/cancel/resize to match reference)
-- [ ] config: venue, instruments, depth, refresh interval
-- [ ] tests: no user activity ⇒ engine book ≈ reference
+- [x] `internal/emulator/seeder.go`: reference levels → synthetic resting orders (tagged)
+- [x] reconcile loop (add/cancel/resize to match reference; cancel-before-place; not-found-tolerant)
+- [x] config: instrument, depth levels; `Run(interval)` cadence + `Clear`
+- [x] tests: no user activity ⇒ engine book == reference (+ resize/cancel/cap/idempotent/skip)
+- [x] brutal review + fixes (ErrOrderNotFound benign; proved no cross-side self-match)
+- [ ] (deferred to Phase 4) partial-fill top-up accounting; venue/refresh wiring into configs/cmd
 
 ## Phase 4 — Return-to-Reference [a]
+- [ ] fill accounting (carried from Phase 3): top partially-eaten synthetic levels back to reference size; track desired vs resting remainder; volume compare with tolerance not `==`
+- [ ] seeder lock: snapshot diff → release mutex → apply engine calls (don't block Clear/shutdown)
 - [ ] `internal/emulator/rtr.go`: drain stale synthetics first
 - [ ] progressive convergence over `tau` (exp decay of deviation)
 - [ ] track spot moves (shift synthetic liquidity)

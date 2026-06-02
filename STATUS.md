@@ -3,7 +3,7 @@
 _Last updated: 2026-06-02_
 
 ## Current phase
-**Phase 2 — Reference book** ✅ complete (CI green, live-verified, brutal review applied) → next: **Phase 3 — Emulator seeding**
+**Phase 3 — Emulator seeding** ✅ complete (CI green, live-verified end-to-end, brutal review applied) → next: **Phase 4 — Return-to-Reference**
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -14,7 +14,7 @@ _Last updated: 2026-06-02_
 | 0 | Foundations, CI, docs | ☑ | docs + `ci.sh` + Makefile committed; baseline CI **green**; brutal review done + fixes applied |
 | 1 | Feed ingestion layer | ☑ | channel-based `feed.Source`; Binance @trade+@depth20, Coinbase market_trades + from-scratch level2; replay+record; `cmd/feedcat`. CI green; **live-verified** both venues + deterministic replay; brutal review applied (determinism, book-integrity, liveness/reconnect, lifecycle test). |
 | 2 | Reference book | ☑ | `internal/reference` Book (snapshot+diff, float-keyed levels, crossed-book detection, staleness) + Set (per-instrument routing, Consume). Coinbase connection-global seq-gap detection in adapter. CI green; live BTC-USD book uncrossed; review applied. |
-| 3 | Emulator seeding | ☐ | mirror reference liquidity as synthetic orders |
+| 3 | Emulator seeding | ☑ | `internal/emulator.Seeder` mirrors `reference.Book` → tagged synthetic engine orders; reconcile (cancel-before-place, resize, skip crossed), not-found-tolerant, Run/Clear. CI green; live BTC-USD top-20 mirrors exactly, 0 trades; review applied (proved no self-match). |
 | 4 | Return-to-Reference [a] | ☐ | convergence controller |
 | 5 | Trade replay sync | ☐ | inject real tape in sync |
 | 6 | Configurable toxicity [b] | ☐ | Kyle λ + VPIN, weighting knobs |
@@ -59,5 +59,11 @@ _Last updated: 2026-06-02_
 - None.
 
 ## Next actions
-1. Begin Phase 3 emulator seeding: map `reference.Book` levels → synthetic
-   resting orders in `internal/engine`; reconcile loop; tag synthetic orders.
+1. Begin Phase 4 return-to-reference: after a user trade perturbs the engine
+   book, drain stale synthetics + converge back to reference over `tau`.
+2. Carry into Phase 4 (deferred from Phase 3 review): fill accounting — when a
+   user trade partially eats a synthetic order, the seeder must top the level
+   back to reference size (track desired vs resting remainder separately;
+   compare volumes with tolerance, not `==`). Also reconsider holding the
+   seeder mutex across many engine calls (snapshot diff, release, then apply)
+   so `Clear`/shutdown isn't blocked by a deep reconcile.
