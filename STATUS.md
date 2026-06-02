@@ -3,7 +3,7 @@
 _Last updated: 2026-06-02_
 
 ## Current phase
-**Phase 1 — Feed ingestion** (code complete, CI green, live-verified) → brutal review → next: **Phase 2 — Reference book**
+**Phase 1 — Feed ingestion** ✅ complete (CI green, live-verified, brutal review applied) → next: **Phase 2 — Reference book**
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -12,7 +12,7 @@ _Last updated: 2026-06-02_
 | # | Phase | State | Notes |
 |---|-------|-------|-------|
 | 0 | Foundations, CI, docs | ☑ | docs + `ci.sh` + Makefile committed; baseline CI **green**; brutal review done + fixes applied |
-| 1 | Feed ingestion layer | ◐ | channel-based `feed.Source`; Binance @trade+@depth20, Coinbase market_trades + from-scratch level2; replay+record; `cmd/feedcat`. CI green; **live-verified** both venues + deterministic replay. Pending brutal review. |
+| 1 | Feed ingestion layer | ☑ | channel-based `feed.Source`; Binance @trade+@depth20, Coinbase market_trades + from-scratch level2; replay+record; `cmd/feedcat`. CI green; **live-verified** both venues + deterministic replay; brutal review applied (determinism, book-integrity, liveness/reconnect, lifecycle test). |
 | 2 | Reference book | ☐ | snapshot+diff per instrument |
 | 3 | Emulator seeding | ☐ | mirror reference liquidity as synthetic orders |
 | 4 | Return-to-Reference [a] | ☐ | convergence controller |

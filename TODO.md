@@ -21,7 +21,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] feed record mode (`feedcat -record`) → JSONL; sample under `testdata/feed/`
 - [x] `cmd/feedcat/`: print live normalized trades+book (live-verified both venues)
 - [x] unit tests (parse fixtures → expected events; record/replay round-trip)
-- [ ] brutal review subagent + fixes
+- [x] brutal review subagent + fixes (recv-time determinism, parse-failure drops, read deadline + ctx-close, RunReconnect backoff, error counting, lifecycle test)
 
 ## Phase 2 — Reference book
 - [ ] `internal/reference/book.go`: per-instrument LOB, snapshot+diff apply
