@@ -47,6 +47,31 @@ type Config struct {
 	Instruments []Instrument `yaml:"instruments"`
 	Storage     Storage      `yaml:"storage"`
 	Emulator    Emulator     `yaml:"emulator"`
+	API         APIConfig    `yaml:"api"`
+}
+
+// APIConfig groups optional third-party-compatible API edges.
+type APIConfig struct {
+	Binance BinanceConfig `yaml:"binance"`
+}
+
+// BinanceConfig configures the Binance-spot-compatible REST edge (PLAN Phase
+// 8, a documented SUBSET). Disabled by default. APIKey/Secret are the
+// credentials a stock Binance client must present (HMAC-SHA256 signing).
+// Symbols maps Binance concatenated symbols to engine instruments.
+type BinanceConfig struct {
+	Enabled bool         `yaml:"enabled"`
+	Listen  string       `yaml:"listen"`
+	APIKey  string       `yaml:"api_key"`
+	Secret  string       `yaml:"secret"`
+	Symbols []SymbolPair `yaml:"symbols"`
+}
+
+// SymbolPair maps a Binance symbol ("BTCUSDT") to an engine instrument
+// ("BTC-USD").
+type SymbolPair struct {
+	Binance string `yaml:"binance"`
+	Engine  string `yaml:"engine"`
 }
 
 // Emulator configures live-venue mirroring (feed → reference book → seeded

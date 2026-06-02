@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/zeta1999/crypto-exchange-golang/internal/api/binance"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/grpcserver"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/httpserver"
 	wsadapter "github.com/zeta1999/crypto-exchange-golang/internal/api/ws"
@@ -114,6 +115,28 @@ func main() {
 		}
 		return nil
 	})
+
+	// Optional Binance-spot-compatible REST edge (Phase 8, a documented
+	// SUBSET). Additive and gated behind cfg.API.Binance.Enabled.
+	if cfg.API.Binance.Enabled {
+		bcfg := cfg.API.Binance
+		pairs := make([]binance.SymbolPair, 0, len(bcfg.Symbols))
+		for _, sp := range bcfg.Symbols {
+			pairs = append(pairs, binance.SymbolPair{Binance: sp.Binance, Engine: sp.Engine})
+		}
+		symbolMap := binance.NewSymbolMap(pairs)
+		authn := binance.NewAuthenticator(bcfg.APIKey, bcfg.Secret, nil)
+		registry := binance.NewRegistry(nil)
+		binanceSrv := binance.New(eng, symbolMap, authn, registry)
+		binanceSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking
+		group.Go(func() error {
+			log.Printf("Binance REST edge listening on %s", bcfg.Listen)
+			if err := binance.ListenAndServe(ctx, bcfg.Listen, binanceSrv, cfg.Network.TLS.CertFile, cfg.Network.TLS.KeyFile); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
+		})
+	}
 
 	if err := group.Wait(); err != nil {
 		log.Fatalf("server error: %v", err)

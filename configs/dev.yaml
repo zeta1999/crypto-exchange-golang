@@ -20,6 +20,22 @@ instruments:
     quote: "USD"
 storage:
   wal_path: "data/exchange.wal"
+# Binance-spot-compatible REST edge (PLAN Phase 8 — a documented SUBSET). When
+# enabled, a stock Binance client (CCXT, python-binance) pointed at `listen`
+# with only the base URL changed can place/cancel/query orders and read
+# depth/ticker. REST only; the WebSocket user-data / market streams are a noted
+# follow-up. Disabled by default.
+api:
+  binance:
+    enabled: false
+    listen: ":8082"
+    api_key: ""                # credential the client sends in X-MBX-APIKEY
+    secret: ""                 # HMAC-SHA256 signing secret
+    symbols:                   # Binance concatenated symbol -> engine instrument
+      - binance: "BTCUSDT"
+        engine: "BTC-USD"
+      - binance: "ETHUSDT"
+        engine: "ETH-USD"
 # Live-venue emulation: mirror a real exchange's order book into the engine as
 # synthetic liquidity, converging back to the reference after user trades.
 # Set enabled: false to run as a plain matching engine (offline).
