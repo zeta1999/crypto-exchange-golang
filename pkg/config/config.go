@@ -58,6 +58,19 @@ type Emulator struct {
 	Instruments []string          `yaml:"instruments"`
 	Reference   EmulatorReference `yaml:"reference"`
 	RTR         EmulatorRTR       `yaml:"rtr"`
+	Toxicity    EmulatorToxicity  `yaml:"toxicity"`
+}
+
+// EmulatorToxicity configures the adverse-selection model (PLAN [b]). Scale=0
+// disables it (pure return-to-reference).
+type EmulatorToxicity struct {
+	Scale        float64 `yaml:"scale"`
+	KyleWeight   float64 `yaml:"kyle_weight"`
+	VPINWeight   float64 `yaml:"vpin_weight"`
+	WindowTrades int     `yaml:"window_trades"`
+	BucketVolume float64 `yaml:"bucket_volume"`
+	Buckets      int     `yaml:"buckets"`
+	Seed         int64   `yaml:"seed"`
 }
 
 // EmulatorReference controls how the reference book is mirrored into the engine.

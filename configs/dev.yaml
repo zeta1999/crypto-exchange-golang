@@ -32,3 +32,11 @@ emulator:
     refresh_ms: 250            # reconcile / convergence cadence
   rtr:
     tau_ms: 3000               # return-to-reference horizon; 0 = instant mirror
+  toxicity:                    # adverse selection; scale 0 = off (pure return-to-reference)
+    scale: 0.0                 # >0 enables: resting user orders get picked off more in toxic flow
+    kyle_weight: 1.0           # lambda → price penetration of the adverse sweep
+    vpin_weight: 1.0           # VPIN → adverse-fill probability
+    window_trades: 500         # rolling window for the lambda regression
+    bucket_volume: 1.0         # VPIN volume-bucket size (base asset)
+    buckets: 50                # VPIN buckets averaged
+    seed: 42                   # deterministic firing

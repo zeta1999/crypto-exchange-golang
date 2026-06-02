@@ -13,6 +13,7 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed/coinbase"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/reference"
+	"github.com/zeta1999/crypto-exchange-golang/internal/toxicity"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/config"
 	"golang.org/x/sync/errgroup"
 )
@@ -68,12 +69,46 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 	// Each instrument's tape runs on its own goroutine, fed by a buffered
 	// channel, so a burst of trade prints can't head-of-line block reference
 	// book updates (which the dispatcher applies inline) or the seeder/RTR.
+	// Each trade is replayed (fills resting orders in sync) and then fed to the
+	// optional toxicity injector (adverse selection scaled by Kyle λ / VPIN).
+	tx := cfg.Toxicity
 	tapeCh := make(map[string]chan feed.Event, len(cfg.Instruments))
 	for _, sym := range cfg.Instruments {
 		ch := make(chan feed.Event, 1024)
 		tapeCh[sym] = ch
 		tape := emulator.NewTapeReplay(eng, sym)
-		group.Go(func() error { tape.Run(ctx, ch); return nil })
+		var injector *emulator.ToxicInjector
+		if tx.Scale > 0 {
+			model := toxicity.New(toxicity.Config{
+				Scale: tx.Scale, KyleWeight: tx.KyleWeight, VPINWeight: tx.VPINWeight,
+				WindowTrades: tx.WindowTrades, BucketVolume: tx.BucketVolume,
+				Buckets: tx.Buckets, Seed: tx.Seed,
+			})
+			injector = emulator.NewToxicInjector(eng, refs.Ensure(sym, cfg.Venue), model, sym, tx.Seed)
+		}
+		group.Go(func() error {
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				case ev, ok := <-ch:
+					if !ok {
+						return nil
+					}
+					if ev.Kind != feed.EventTrade || ev.Trade == nil {
+						continue
+					}
+					if _, err := tape.Inject(ctx, ev.Trade); err != nil {
+						log.Printf("tape inject error: %v", err)
+					}
+					if injector != nil {
+						if _, err := injector.Observe(ctx, ev.Trade); err != nil {
+							log.Printf("toxicity inject error: %v", err)
+						}
+					}
+				}
+			}
+		})
 	}
 
 	group.Go(func() error {
