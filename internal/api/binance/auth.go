@@ -1,15 +1,21 @@
 package binance
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// maxSignedBody caps the request body read during signature verification of a
+// POST/PUT SIGNED request, bounding memory for a hostile client.
+const maxSignedBody = 1 << 20
 
 // defaultRecvWindow is Binance's default recvWindow (milliseconds): a SIGNED
 // request whose timestamp is more than this far from server time is rejected.
@@ -70,7 +76,7 @@ func (a *Authenticator) Verify(r *http.Request) error {
 		return &apiError{Code: codeRejectedKey, Msg: "Invalid API-key, IP, or permissions for action.", status: http.StatusUnauthorized}
 	}
 
-	raw := rawQuery(r)
+	raw := signedPayload(r)
 	signed, sig, ok := splitSignature(raw)
 	if !ok {
 		return &apiError{Code: codeInvalidSignature, Msg: "Signature for this request is not valid.", status: http.StatusBadRequest}
@@ -88,11 +94,14 @@ func (a *Authenticator) Verify(r *http.Request) error {
 	return a.checkTimestamp(r)
 }
 
-// checkTimestamp enforces presence and the recvWindow bound. It reads the
-// parsed form (signing already validated the raw bytes, so re-parsing here is
-// safe).
+// checkTimestamp enforces presence and the recvWindow bound. It reads r.Form,
+// which merges the URL query with the form-urlencoded body, so the timestamp is
+// found whether the client put SIGNED params in the query (GET/DELETE) or the
+// body (POST/PUT). ParseForm is safe here: signedPayload already restored the
+// body, and ParseForm caches, so the handler's later reads still work.
 func (a *Authenticator) checkTimestamp(r *http.Request) error {
-	q := r.URL.Query()
+	_ = r.ParseForm()
+	q := r.Form
 	tsStr := q.Get("timestamp")
 	if tsStr == "" {
 		return errMandatoryParam("timestamp")
@@ -128,6 +137,26 @@ func (a *Authenticator) checkTimestamp(r *http.Request) error {
 // the client's exact ordering and encoding.
 func rawQuery(r *http.Request) string {
 	return r.URL.RawQuery
+}
+
+// signedPayload returns the material Binance signs: the "totalParams" string,
+// defined as the query string concatenated with the request body. SIGNED
+// parameters are sent in the query (real Binance clients use this for
+// GET/DELETE) or in a form-urlencoded body (POST/PUT — what CCXT, the official
+// SDKs, and the web client do); concatenating both matches the spec and accepts
+// either placement. The body is read under a size cap and restored so the
+// handler can still parse it.
+func signedPayload(r *http.Request) string {
+	q := rawQuery(r)
+	if r.Body == nil || r.Method == http.MethodGet {
+		return q
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxSignedBody))
+	if err != nil {
+		return q
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	return q + string(body)
 }
 
 // splitSignature separates the signed portion of a query string from the
