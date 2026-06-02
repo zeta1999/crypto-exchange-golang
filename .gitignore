@@ -16,3 +16,6 @@
 .DS_Store
 *.swp
 /xxx.txt
+
+# CCXT conformance harness binary
+/conformance/ccxt-go/ccxt-go
