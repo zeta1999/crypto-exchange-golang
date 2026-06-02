@@ -36,6 +36,21 @@ api:
         engine: "BTC-USD"
       - binance: "ETHUSDT"
         engine: "ETH-USD"
+  # Coinbase-Advanced-Trade-compatible REST edge (PLAN Phase 9 — a documented
+  # SUBSET). When enabled, a client (CCXT in HMAC mode) pointed at `listen` with
+  # only the base URL changed can place/cancel/query orders and read the product
+  # book + a product ticker. REST only; the WebSocket channels are a noted
+  # follow-up. Auth uses the legacy Coinbase Exchange HMAC scheme (CB-ACCESS-*);
+  # production JWT/ES256 is deferred. Disabled by default.
+  coinbase:
+    enabled: false
+    listen: ":8083"
+    api_key: ""                # credential the client sends in CB-ACCESS-KEY
+    secret: ""                 # HMAC-SHA256 signing secret (base64 or raw)
+    passphrase: ""             # optional; enforced only if set
+    products:                  # allow-list of product IDs (== engine instruments)
+      - "BTC-USD"
+      - "ETH-USD"
 # Live-venue emulation: mirror a real exchange's order book into the engine as
 # synthetic liquidity, converging back to the reference after user trades.
 # Set enabled: false to run as a plain matching engine (offline).

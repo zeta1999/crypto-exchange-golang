@@ -52,7 +52,8 @@ type Config struct {
 
 // APIConfig groups optional third-party-compatible API edges.
 type APIConfig struct {
-	Binance BinanceConfig `yaml:"binance"`
+	Binance  BinanceConfig  `yaml:"binance"`
+	Coinbase CoinbaseConfig `yaml:"coinbase"`
 }
 
 // BinanceConfig configures the Binance-spot-compatible REST edge (PLAN Phase
@@ -72,6 +73,21 @@ type BinanceConfig struct {
 type SymbolPair struct {
 	Binance string `yaml:"binance"`
 	Engine  string `yaml:"engine"`
+}
+
+// CoinbaseConfig configures the Coinbase-Advanced-Trade-compatible REST edge
+// (PLAN Phase 9, a documented SUBSET). Disabled by default. APIKey/Secret/
+// Passphrase are the credentials a client must present (legacy Coinbase
+// Exchange HMAC-SHA256 signing; JWT/ES256 is deferred). Products is the
+// allow-list of product IDs to serve; Coinbase product IDs ("BTC-USD") are
+// identical to engine instruments.
+type CoinbaseConfig struct {
+	Enabled    bool     `yaml:"enabled"`
+	Listen     string   `yaml:"listen"`
+	APIKey     string   `yaml:"api_key"`
+	Secret     string   `yaml:"secret"`
+	Passphrase string   `yaml:"passphrase"`
+	Products   []string `yaml:"products"`
 }
 
 // Emulator configures live-venue mirroring (feed → reference book → seeded

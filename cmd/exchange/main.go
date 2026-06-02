@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/binance"
+	"github.com/zeta1999/crypto-exchange-golang/internal/api/coinbase"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/grpcserver"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/httpserver"
 	wsadapter "github.com/zeta1999/crypto-exchange-golang/internal/api/ws"
@@ -132,6 +133,24 @@ func main() {
 		group.Go(func() error {
 			log.Printf("Binance REST edge listening on %s", bcfg.Listen)
 			if err := binance.ListenAndServe(ctx, bcfg.Listen, binanceSrv, cfg.Network.TLS.CertFile, cfg.Network.TLS.KeyFile); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
+		})
+	}
+
+	// Optional Coinbase-Advanced-Trade-compatible REST edge (Phase 9, a
+	// documented SUBSET). Additive and gated behind cfg.API.Coinbase.Enabled.
+	if cfg.API.Coinbase.Enabled {
+		ccfg := cfg.API.Coinbase
+		products := coinbase.NewProducts(ccfg.Products)
+		authn := coinbase.NewAuthenticator(ccfg.APIKey, ccfg.Secret, ccfg.Passphrase, nil)
+		registry := coinbase.NewRegistry(nil)
+		coinbaseSrv := coinbase.New(eng, products, authn, registry)
+		coinbaseSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking
+		group.Go(func() error {
+			log.Printf("Coinbase REST edge listening on %s", ccfg.Listen)
+			if err := coinbase.ListenAndServe(ctx, ccfg.Listen, coinbaseSrv, cfg.Network.TLS.CertFile, cfg.Network.TLS.KeyFile); err != nil && !errors.Is(err, context.Canceled) {
 				return err
 			}
 			return nil
