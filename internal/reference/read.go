@@ -1,0 +1,132 @@
+package reference
+
+import (
+	"time"
+
+	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
+)
+
+// Initialized reports whether at least one snapshot has been applied.
+func (b *Book) Initialized() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.initialized
+}
+
+// Anomalies returns the count of dropped frames (diffs without a base, or
+// out-of-order sequence numbers) — a health signal for the feed.
+func (b *Book) Anomalies() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.anomalies
+}
+
+// LastUpdate returns the timestamp of the most recently applied frame.
+func (b *Book) LastUpdate() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastUpdate
+}
+
+// Stale reports whether the book has not updated within maxAge of now, or
+// has never been initialized. A non-positive maxAge disables the age check
+// (only the initialization state matters).
+func (b *Book) Stale(now time.Time, maxAge time.Duration) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.initialized {
+		return true
+	}
+	if maxAge <= 0 {
+		return false
+	}
+	return now.Sub(b.lastUpdate) > maxAge
+}
+
+// BestBid returns the highest bid level, or ok=false if the bid side is empty.
+func (b *Book) BestBid() (feed.LOBLevel, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rebuild()
+	if len(b.sortedBids) == 0 {
+		return feed.LOBLevel{}, false
+	}
+	return b.sortedBids[0], true
+}
+
+// BestAsk returns the lowest ask level, or ok=false if the ask side is empty.
+func (b *Book) BestAsk() (feed.LOBLevel, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rebuild()
+	if len(b.sortedAsks) == 0 {
+		return feed.LOBLevel{}, false
+	}
+	return b.sortedAsks[0], true
+}
+
+// BestBidAsk returns both tops; ok is false unless both sides are non-empty.
+func (b *Book) BestBidAsk() (bid, ask feed.LOBLevel, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rebuild()
+	if len(b.sortedBids) == 0 || len(b.sortedAsks) == 0 {
+		return feed.LOBLevel{}, feed.LOBLevel{}, false
+	}
+	return b.sortedBids[0], b.sortedAsks[0], true
+}
+
+// Mid returns the midpoint of the touch, or ok=false if either side is empty.
+func (b *Book) Mid() (float64, bool) {
+	bid, ask, ok := b.BestBidAsk()
+	if !ok {
+		return 0, false
+	}
+	return (bid.Price + ask.Price) / 2, true
+}
+
+// Spread returns best ask minus best bid, or ok=false if either side is empty.
+func (b *Book) Spread() (float64, bool) {
+	bid, ask, ok := b.BestBidAsk()
+	if !ok {
+		return 0, false
+	}
+	return ask.Price - bid.Price, true
+}
+
+// Depth returns copies of the top n levels per side (n <= 0 means all),
+// sorted bids descending and asks ascending. The returned slices are owned
+// by the caller and safe to mutate.
+func (b *Book) Depth(n int) (bids, asks []feed.LOBLevel) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rebuild()
+	return clip(b.sortedBids, n), clip(b.sortedAsks, n)
+}
+
+func clip(s []feed.LOBLevel, n int) []feed.LOBLevel {
+	if n <= 0 || n > len(s) {
+		n = len(s)
+	}
+	out := make([]feed.LOBLevel, n)
+	copy(out, s[:n])
+	return out
+}
+
+// Snapshot returns an immutable copy of the current book as a feed.LOBSnapshot
+// (Snapshot=true), carrying the last sequence number and update time. Safe to
+// hand to downstream consumers without exposing internal state.
+func (b *Book) Snapshot() *feed.LOBSnapshot {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rebuild()
+	return &feed.LOBSnapshot{
+		Instrument:     b.instrument,
+		Exchange:       b.exchange,
+		Timestamp:      b.lastUpdate,
+		SequenceNumber: b.lastSeq,
+		Snapshot:       true,
+		Bids:           clip(b.sortedBids, 0),
+		Asks:           clip(b.sortedAsks, 0),
+	}
+}
