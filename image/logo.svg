@@ -1,0 +1,49 @@
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="mirage exchange emulator">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#11151c"/>
+      <stop offset="1" stop-color="#0a0d12"/>
+    </linearGradient>
+    <linearGradient id="reflect" x1="0" y1="100" x2="0" y2="172" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="2" y="2" width="196" height="196" rx="34" fill="url(#bg)" stroke="#222b36" stroke-width="2"/>
+
+  <!-- reference (mirror) line: the live feed we converge back to -->
+  <line x1="26" y1="100" x2="174" y2="100" stroke="#6c5ce7" stroke-width="2" stroke-dasharray="6 6" opacity="0.85"/>
+  <circle cx="174" cy="100" r="3.5" fill="#6c5ce7"/>
+
+  <!-- candlesticks (the live market) -->
+  <g stroke-width="7" stroke-linecap="round">
+    <!-- green up candle -->
+    <line x1="52" y1="44" x2="52" y2="92" stroke="#2ed573"/>
+    <line x1="52" y1="52" x2="52" y2="84" stroke="#2ed573" stroke-width="15"/>
+    <!-- red down candle -->
+    <line x1="84" y1="38" x2="84" y2="96" stroke="#ff5e57"/>
+    <line x1="84" y1="50" x2="84" y2="88" stroke="#ff5e57" stroke-width="15"/>
+    <!-- orange up candle (touches reference) -->
+    <line x1="116" y1="40" x2="116" y2="90" stroke="#ff9d2b"/>
+    <line x1="116" y1="48" x2="116" y2="82" stroke="#ff9d2b" stroke-width="15"/>
+    <!-- go-blue candle -->
+    <line x1="148" y1="46" x2="148" y2="94" stroke="#00ADD8"/>
+    <line x1="148" y1="56" x2="148" y2="86" stroke="#00ADD8" stroke-width="15"/>
+  </g>
+
+  <!-- mirrored reflection below the reference line (the emulated copy) -->
+  <g transform="translate(0,200) scale(1,-1)" opacity="0.5">
+    <g stroke-width="7" stroke-linecap="round">
+      <line x1="52" y1="44" x2="52" y2="92" stroke="#2ed573"/>
+      <line x1="52" y1="52" x2="52" y2="84" stroke="#2ed573" stroke-width="15"/>
+      <line x1="84" y1="38" x2="84" y2="96" stroke="#ff5e57"/>
+      <line x1="84" y1="50" x2="84" y2="88" stroke="#ff5e57" stroke-width="15"/>
+      <line x1="116" y1="40" x2="116" y2="90" stroke="#ff9d2b"/>
+      <line x1="116" y1="48" x2="116" y2="82" stroke="#ff9d2b" stroke-width="15"/>
+      <line x1="148" y1="46" x2="148" y2="94" stroke="#00ADD8"/>
+      <line x1="148" y1="56" x2="148" y2="86" stroke="#00ADD8" stroke-width="15"/>
+    </g>
+  </g>
+  <rect x="26" y="100" width="148" height="72" fill="url(#reflect)"/>
+</svg>

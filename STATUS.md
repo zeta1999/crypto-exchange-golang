@@ -18,10 +18,11 @@ _Last updated: 2026-06-02_
 | 4 | Return-to-Reference [a] | ☐ | convergence controller |
 | 5 | Trade replay sync | ☐ | inject real tape in sync |
 | 6 | Configurable toxicity [b] | ☐ | Kyle λ + VPIN, weighting knobs |
-| 7 | Binance-compatible API | ☐ | REST + WS subset |
-| 8 | Coinbase-compatible API | ☐ | Advanced Trade REST + WS subset |
-| 9 | Custody examples (stretch) | ☐ | XLM / Solana / ERC20, testnet only |
-| 10 | Hardening & observability | ☐ | metrics, scenario tests |
+| 7 | Scenario & fault injection (test bed) | ☐ | trace replay, artificial latency, price-shift / arb scenarios |
+| 8 | Binance-compatible API | ☐ | REST + WS subset |
+| 9 | Coinbase-compatible API | ☐ | Advanced Trade REST + WS subset |
+| 10 | Custody examples (stretch) | ☐ | XLM / Solana / ERC20, testnet only |
+| 11 | Hardening & observability | ☐ | metrics, scenario tests |
 
 ## Baseline (inherited skeleton)
 - ☑ Price-time matching engine (`internal/engine`, `internal/orderbook`)
@@ -44,6 +45,11 @@ _Last updated: 2026-06-02_
 - 2026-06-02: Custody (XLM/Solana/ERC20) is **stretch, testnet-only, off by default**, keys via env.
 - 2026-06-02: Determinism — matching deterministic; RTR + toxicity use a seedable RNG.
 - 2026-06-02: Toxicity uses Kyle's λ + VPIN with a global `scale` knob (0 = off).
+- 2026-06-02: **Primary use case = test bed for the user's trading/OMS system** (technical
+  + scenario testing). Added Phase 7 (scenario & fault injection): **trace replay**,
+  **artificial latency**, **artificial price shift** (manufacture cross-venue dislocations
+  to test arbitrage / relative-value models). Phases renumbered 7→8…10→11.
+- 2026-06-02: Project codename **mirage** (README + logo); easily renamed.
 
 ## Blocked / waiting
 - None.

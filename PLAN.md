@@ -23,6 +23,21 @@ engine. Two control mechanisms make the emulation realistic:
 Optional stretch: **custody examples** showing deposit/withdraw + balance settlement on
 **XLM**, **Solana**, and **ERC20** (testnets only).
 
+### Primary use case: a test bed for trading / OMS systems
+
+`mirage` is built first and foremost as a **deterministic, scriptable sandbox** to run an
+OMS or trading strategy against — for technical tests (connectivity, order lifecycle,
+reconnection, backpressure) and scenario tests (regime changes, dislocations, stress). To
+that end it provides three **fault/scenario-injection** controls in addition to [a]/[b]:
+
+- **Trace replay:** replay past market events from recorded traces — deterministic and
+  repeatable, at real-time or accelerated `speed`.
+- **Artificial latency:** inject configurable delays (feed→book, order ack, fill report,
+  per-API-edge, with jitter) to exercise how the system under test handles slow/racy venues.
+- **Artificial price shift:** offset/scale the reference price per venue to manufacture
+  **cross-venue dislocations** — a controlled lab for testing **arbitrage** and
+  relative-value models.
+
 ## 2. Design principles
 
 - **Stay simple at each step.** Prefer the smallest model that produces believable behavior.
@@ -152,31 +167,51 @@ subagent addressed, manual TESTING steps for the phase pass. Commit after each p
 - **DoD:** With toxicity high, resting user limits get adversely filled more often (and
   near unfavorable prints); with `scale: 0`, behavior reduces to pure RTR. Stats logged.
 
-### Phase 7 — Binance-compatible API
+### Phase 7 — Scenario & fault injection (OMS / strategy test bed)
+The test-bed core: deterministic, scriptable controls to drive the system under test.
+- **Trace replay (full):** record live feeds to traces (Phase 1 groundwork) and replay
+  them deterministically through the whole emulator (reference + seeding + RTR + toxicity),
+  at real-time or accelerated `speed`. Reproducible with a fixed seed.
+- **Artificial latency:** `internal/emulator/latency.go` injects configurable delays at
+  defined points — `feed_to_book_ms`, `order_ack_ms`, `fill_report_ms`, per-API-edge, plus
+  `jitter_ms`. Used to test OMS behavior under slow/racy venues and ack/fill ordering.
+- **Artificial price shift:** `internal/emulator/priceshift.go` applies an `offset_bps`
+  and/or `scale` to a venue's reference price, so two emulated venues can be driven apart to
+  manufacture **cross-venue dislocations** — a controlled lab for **arbitrage** and
+  relative-value strategy testing.
+- **Scenario scripting:** a small scenario format (YAML/JSONL) to sequence events — "at
+  t=10s shift BTC-USD +15bps", "add 50ms order-ack latency", "replay trace X at 4×".
+- **DoD:** A scripted scenario reproduces bit-for-bit across runs; an OMS under test sees
+  injected latency in its ack/fill timestamps; two venues with a configured price gap
+  expose a closeable arbitrage; all controls reduce to no-ops when zeroed.
+
+### Phase 8 — Binance-compatible API
 - `internal/api/binance/`: REST subset (`/api/v3/order` POST/DELETE, `/api/v3/openOrders`,
   `/api/v3/depth`, `/api/v3/ticker/price`, `/api/v3/account`) + user-data & market WS
   streams (`@depth`, `@trade`, executionReport). HMAC-SHA256 signing emulation.
-- Map Binance symbols/precision to internal instruments.
+- Map Binance symbols/precision to internal instruments. Latency injection (Phase 7) applies
+  at this edge.
 - **DoD:** `python-binance` (or curl) can place/cancel/query orders and stream depth
   against the emulator.
 
-### Phase 8 — Coinbase-compatible API
+### Phase 9 — Coinbase-compatible API
 - `internal/api/coinbase/`: Advanced Trade REST subset (create/cancel order, list orders,
   product book, ticker) + WS (`level2`, `market_trades`, `user`). JWT/HMAC auth emulation.
 - **DoD:** A Coinbase Advanced Trade client (or curl with signed headers) trades and
   streams against the emulator.
 
-### Phase 9 — Custody examples (optional / stretch)
+### Phase 10 — Custody examples (optional / stretch)
 - `internal/custody/` with pluggable chains, **testnet only**, deposit-address generation,
   balance crediting on confirmation, withdrawal signing:
   - **XLM** (Horizon testnet), **Solana** (devnet), **ERC20** (Sepolia).
 - Wire balances into account endpoints so deposits fund trading.
 - **DoD:** A testnet deposit credits a balance; a withdrawal broadcasts a testnet tx.
 
-### Phase 10 — Hardening & observability
-- Metrics (Prometheus): book deviation vs reference, λ/VPIN gauges, fill counts, feed lag.
+### Phase 11 — Hardening & observability
+- Metrics (Prometheus): book deviation vs reference, λ/VPIN gauges, fill counts, feed lag,
+  injected-latency histograms.
 - Structured logging, config validation, rate limiting on API edges, graceful resync.
-- Scenario harness + golden-file tests for RTR and toxicity.
+- Scenario harness + golden-file tests for RTR, toxicity, and fault injection.
 - **DoD:** Dashboards/logs show emulation health; CI includes scenario tests.
 
 ## 6. Configuration sketch (`configs/dev.yaml` additions)
@@ -198,10 +233,20 @@ emulator:
     vpin_weight: 1.0
     window_trades: 500
     seed: 42
-  replay:
+  replay:                  # trace replay (test bed)
     mode: live             # live | file
-    file: ""               # used when mode=file
-    speed: 1.0             # playback multiplier
+    file: ""               # recorded trace, used when mode=file
+    speed: 1.0             # playback multiplier (accelerated scenarios)
+  latency:                 # artificial latency injection (test bed)
+    feed_to_book_ms: 0
+    order_ack_ms: 0
+    fill_report_ms: 0
+    jitter_ms: 0
+  price_shift:             # artificial price shift — manufacture cross-venue arb (test bed)
+    offset_bps: 0          # additive shift in basis points
+    scale: 1.0             # multiplicative shift (1.0 = none)
+  scenario:                # optional scripted timeline of injection events (Phase 7)
+    file: ""               # scenario YAML/JSONL; empty = none
 api:
   binance:  { enabled: false, listen: ":8082" }
   coinbase: { enabled: false, listen: ":8083" }

@@ -99,7 +99,29 @@ section lists prerequisites, steps, and expected results. Record outcomes in `ST
 
 ---
 
-## Phase 7 — Binance-compatible API
+## Phase 7 — Scenario & fault injection (test bed)
+**Prereq:** a recorded trace; emulator running on `replay.mode: file`.
+**Steps**
+1. **Trace replay determinism:** run the same trace + same `seed` twice; diff the resulting
+   fill logs / book snapshots.
+2. **Artificial latency:** set `latency.order_ack_ms: 50`, `fill_report_ms: 30`,
+   `jitter_ms: 10`; submit orders and timestamp ack/fill at the client.
+3. **Artificial price shift:** run two venues, apply `price_shift.offset_bps: 15` to one;
+   observe a cross-venue spread; run a toy arb taker and confirm it can lift the cheap side.
+4. **Zeroed controls:** set all latency=0, offset_bps=0, scale=1.0; confirm behavior matches
+   a no-injection run.
+5. **(If implemented) scenario script:** point `scenario.file` at a timeline; confirm events
+   fire at their scheduled offsets.
+
+**Expected**
+- Two seeded replays are bit-for-bit identical.
+- Measured ack/fill latency ≈ configured values (+ jitter band); ordering preserved.
+- The price-shifted venue exposes a closeable arbitrage; gap behaves per config.
+- Zeroed controls reduce to a clean (no-injection) run.
+
+---
+
+## Phase 8 — Binance-compatible API
 **Prereq:** `api.binance.enabled: true`.
 **Steps**
 1. `GET /api/v3/depth?symbol=BTCUSDT` via curl.
@@ -114,7 +136,7 @@ section lists prerequisites, steps, and expected results. Record outcomes in `ST
 
 ---
 
-## Phase 8 — Coinbase-compatible API
+## Phase 9 — Coinbase-compatible API
 **Prereq:** `api.coinbase.enabled: true`.
 **Steps**
 1. `GET` product book + ticker via curl.
@@ -128,7 +150,7 @@ section lists prerequisites, steps, and expected results. Record outcomes in `ST
 
 ---
 
-## Phase 9 — Custody examples (stretch, testnet only)
+## Phase 10 — Custody examples (stretch, testnet only)
 **Prereq:** custody flag on; testnet RPC endpoints + funded faucet keys in env.
 **Steps**
 1. Generate a deposit address (XLM / Solana / ERC20-Sepolia).
@@ -142,9 +164,9 @@ section lists prerequisites, steps, and expected results. Record outcomes in `ST
 
 ---
 
-## Phase 10 — Hardening & observability
+## Phase 11 — Hardening & observability
 **Steps**
-1. Scrape `/metrics`; confirm book-deviation, λ/VPIN, fill, feed-lag series exist.
+1. Scrape `/metrics`; confirm book-deviation, λ/VPIN, fill, feed-lag, latency series exist.
 2. Run the scenario test suite (`go test ./... -run Scenario`).
 3. Feed a malformed config; confirm validation error (no panic).
 
