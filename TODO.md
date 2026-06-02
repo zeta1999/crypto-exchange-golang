@@ -13,14 +13,15 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] Brutal review subagent + fixes (gofmt grep/pipefail bug, test -timeout, make lint mask, feedcat stub)
 
 ## Phase 1 — Feed ingestion layer
-- [ ] `internal/feed/types.go`: `Trade`, `LOBSnapshot`, `LOBLevel`, `Ticker`, `Event`
-- [ ] `internal/feed/source.go`: `Source` interface (`Start/Name/Status`)
-- [ ] `internal/feed/binance/`: port `@depth20@100ms` + `@trade` (channel-based)
-- [ ] `internal/feed/coinbase/`: port `market_trades`; implement `level2` parse+emit
-- [ ] `internal/feed/replay/`: file-backed source (deterministic)
-- [ ] feed record mode → write fixtures under `testdata/feed/`
-- [ ] `cmd/feedcat/`: print live normalized trades+book
-- [ ] unit tests (parse fixtures → expected events)
+- [x] `internal/feed/types.go`: `Trade`, `LOBSnapshot`, `LOBLevel`, `Ticker`, `Event`
+- [x] `internal/feed/source.go`: `Source` interface (`Start/Name/Status`) + `StatusTracker`
+- [x] `internal/feed/binance/`: port `@depth20@100ms` + `@trade` (channel-based)
+- [x] `internal/feed/coinbase/`: port `market_trades`; implement `level2` (l2_data) parse+emit
+- [x] `internal/feed/replay/`: file-backed source (deterministic) + `Recorder`
+- [x] feed record mode (`feedcat -record`) → JSONL; sample under `testdata/feed/`
+- [x] `cmd/feedcat/`: print live normalized trades+book (live-verified both venues)
+- [x] unit tests (parse fixtures → expected events; record/replay round-trip)
+- [ ] brutal review subagent + fixes
 
 ## Phase 2 — Reference book
 - [ ] `internal/reference/book.go`: per-instrument LOB, snapshot+diff apply

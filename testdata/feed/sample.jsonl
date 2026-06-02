@@ -1,0 +1,4 @@
+{"kind":"book","book":{"instrument":"BTC-USD","exchange":"coinbase","timestamp":"2023-11-14T22:13:20Z","snapshot":true,"bids":[{"price":41999,"quantity":1.2},{"price":41998.5,"quantity":3.1}],"asks":[{"price":42001,"quantity":0.5},{"price":42002,"quantity":2.0}]}}
+{"kind":"trade","trade":{"instrument":"BTC-USD","exchange":"coinbase","timestamp":"2023-11-14T22:13:21Z","price":42000.5,"quantity":0.01,"side":"buy","trade_id":"99"}}
+{"kind":"book","book":{"instrument":"BTC-USD","exchange":"coinbase","timestamp":"2023-11-14T22:13:21Z","snapshot":false,"bids":[{"price":41999,"quantity":0}],"asks":[]}}
+{"kind":"trade","trade":{"instrument":"BTCUSDT","exchange":"binance","timestamp":"2023-11-14T22:13:22Z","price":42000.6,"quantity":0.02,"side":"sell","trade_id":"100"}}

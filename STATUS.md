@@ -3,7 +3,7 @@
 _Last updated: 2026-06-02_
 
 ## Current phase
-**Phase 0 — Foundations, CI, docs** (complete) → next: **Phase 1 — Feed ingestion**
+**Phase 1 — Feed ingestion** (code complete, CI green, live-verified) → brutal review → next: **Phase 2 — Reference book**
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -12,7 +12,7 @@ _Last updated: 2026-06-02_
 | # | Phase | State | Notes |
 |---|-------|-------|-------|
 | 0 | Foundations, CI, docs | ☑ | docs + `ci.sh` + Makefile committed; baseline CI **green**; brutal review done + fixes applied |
-| 1 | Feed ingestion layer | ☐ | Port Binance/Coinbase WS adapters from `../this-is-not-bbg` |
+| 1 | Feed ingestion layer | ◐ | channel-based `feed.Source`; Binance @trade+@depth20, Coinbase market_trades + from-scratch level2; replay+record; `cmd/feedcat`. CI green; **live-verified** both venues + deterministic replay. Pending brutal review. |
 | 2 | Reference book | ☐ | snapshot+diff per instrument |
 | 3 | Emulator seeding | ☐ | mirror reference liquidity as synthetic orders |
 | 4 | Return-to-Reference [a] | ☐ | convergence controller |
@@ -50,12 +50,14 @@ _Last updated: 2026-06-02_
   **artificial latency**, **artificial price shift** (manufacture cross-venue dislocations
   to test arbitrage / relative-value models). Phases renumbered 7→8…10→11.
 - 2026-06-02: Project codename **mirage** (README + logo); easily renamed.
+- 2026-06-02: Coinbase uses the **Advanced Trade** WS protocol (per-channel subscribe
+  `{type:subscribe, channel, product_ids}`; book replies on `l2_data` snapshot/update,
+  `new_quantity:"0"` = level removal), **not** the legacy Exchange "channels" array the
+  upstream repo used. Confirmed live: both venues stream trades+book; replay is bit-identical.
 
 ## Blocked / waiting
 - None.
 
 ## Next actions
-1. Finish Phase 0: add `ci.sh`, `Makefile`; run baseline CI.
-2. Commit Phase 0 (no push).
-3. Brutal review subagent on Phase 0 scaffolding; address findings.
-4. Begin Phase 1 feed ingestion.
+1. Brutal review subagent on Phase 1 feed package; address findings; re-run CI.
+2. Begin Phase 2 reference book (consume `feed.Event` stream → per-instrument LOB).
