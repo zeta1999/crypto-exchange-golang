@@ -7,18 +7,21 @@ _Last updated: 2026-06-02_
 exchange (feed → reference → seeded synthetic liquidity + RTR), tradable via gRPC/HTTP/WS, with
 all prices/quantities now exact `decimal.Decimal` (matching core + reference + emulator migrated;
 API edges convert; feed stays float64). Verified live (book 20 levels/side, uncrossed; HTTP emits
-exact decimal strings). Phases 1–6 + Phase 7 core, `pkg/decimal`, and the float64→Decimal migration
-done & reviewed. Phase 7 core adds the artificial **price shift** (manufacture
-cross-venue arb dislocations) and **latency** injectors (config, wired,
-default-off, all reviewed). **Remaining Phase 7:** full trace replay, scenario
-scripting, cross-venue harness, order-ack/fill-report latency at API edges.
-**Near-complete.** Done & reviewed: Phases 1–6, Phase 7 (price-shift, latency, scenario
-scripting), Phases 8–9 (Binance + Coinbase REST + WS), `pkg/decimal` + migration, and Phase 11
-hardening (metrics, rate limiting, config validation). **Remaining:** Phase 7 tail (full trace
-replay through the whole emulator; cross-venue arb harness; ack/fill latency at API edges);
-Phase 11 tail (scenario golden-file CI tests, gRPC/WS request metrics); **Phase 10 custody**
-(stretch, testnet). Deferred polish: decimal Mul/Div limb-math (PLAN §9.7), Coinbase ES256 JWT,
-the CCXT/GoEx endpoint-swap conformance run.
+exact decimal strings). Phases 1–7, `pkg/decimal`, and the float64→Decimal migration
+done & reviewed. **Phase 7 complete:** price shift (cross-venue arb dislocations), latency
+injectors (feed→book, order-ack sync, fill-report async), scenario scripting, full trace replay
++ speed pacing, cross-venue arb harness, and the deterministic clock (byte-reproducible runs) —
+all wired, default-off, reviewed/tested.
+**Near-complete.** Done & reviewed: Phases 1–7 (price-shift, latency incl. ack+fill,
+scenario scripting, trace replay + speed pacing, cross-venue arb harness, deterministic
+clock), Phases 8–9 (Binance + Coinbase REST + WS, incl. exchangeInfo/products loadMarkets
+endpoints), `pkg/decimal` + migration, and Phase 11 hardening (metrics, rate limiting, config
+validation). **CCXT conformance PASS:** the stock `ccxt-go` v4 binance client drives the edge
+end-to-end (loadMarkets→fetchOrderBook→createLimitOrder→fetchOpenOrders→cancelOrder) with only
+the base URL changed (`conformance/ccxt-go/`); surfaced + fixed two SIGNED-POST bugs (sign over
+query+body, timestamp from body). **Remaining:** Phase 11 tail (scenario golden-file CI tests,
+gRPC/WS request metrics); **Phase 10 custody** (stretch, testnet). Deferred polish: Coinbase
+CCXT conformance run (JWT vs HMAC class choice).
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
