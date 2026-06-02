@@ -19,3 +19,7 @@
 
 # CCXT conformance harness binary
 /conformance/ccxt-go/ccxt-go
+
+# custody keystores (encrypted, but never commit) + binary
+*.keystore.json
+/cmd/custody/custody
