@@ -104,7 +104,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] HMAC-SHA256 signature emulation + timestamp/recvWindow (constant-time; -1022/-1021/-2014/-2015)
 - [x] symbol mapping (config BTCUSDT↔BTC-USD); registry w/ hook-driven fill tracking; wired behind config
 - [x] tests (23) + brutal review + fixes (panic guard, phantom-record rollback); live-verified signed order
-- [ ] `internal/api/binance/ws.go`: market streams + user-data (executionReport) — deferred
+- [x] `internal/api/binance/ws.go`: market streams (@trade/@depth20) + user-data executionReport (listenKey)
 - [ ] /exchangeInfo, per-symbol precision filters, real balances — deferred
 - [ ] latency injection (Phase 7) applied at this edge (order_ack/fill_report)
 - [ ] conformance: drive with CCXT / GoEx (endpoint-swapped); also `python-binance`/curl
@@ -114,7 +114,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] HMAC auth emulation (CB-ACCESS-*, base64-or-raw secret, ±30s window); JWT/ES256 deferred
 - [x] product allow-list; registry w/ hook fill tracking; record-before-place + rollback; wired behind config (:8083)
 - [x] tests (31) + brutal review (clean, no fixes needed); live-verified signed create + list
-- [ ] `internal/api/coinbase/ws.go`: level2, market_trades, user channels — deferred
+- [x] `internal/api/coinbase/ws.go`: level2, market_trades, user channels (message-based subscribe)
 - [ ] JWT/ES256 production auth, fee/precision fields, persisted terminal-order history — deferred
 - [ ] conformance: drive with CCXT / GoEx (endpoint-swapped); also Coinbase Advanced Trade client/curl
 

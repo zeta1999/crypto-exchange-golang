@@ -12,10 +12,12 @@ done & reviewed. Phase 7 core adds the artificial **price shift** (manufacture
 cross-venue arb dislocations) and **latency** injectors (config, wired,
 default-off, all reviewed). **Remaining Phase 7:** full trace replay, scenario
 scripting, cross-venue harness, order-ack/fill-report latency at API edges.
-**Phases 8 + 9** Binance + Coinbase REST edges done (signed order lifecycle, live-verified,
-reviewed). The emulator now speaks both venues' REST. **Next:** WS streams (market + user
-data) for both edges, the Phase 7 tail (trace replay, scenario scripting, cross-venue arb
-harness), Phase 11 hardening/metrics, Phase 10 custody (stretch).
+**Phases 8 + 9 fully done** — Binance + Coinbase **REST + WS** edges (signed order lifecycle,
+market + user-data streams), live-verified, reviewed, race-clean. The emulator now speaks both
+venues' full API surface. **Next:** Phase 7 tail (trace replay, scenario scripting, cross-venue
+arb harness, ack/fill latency at API edges); Phase 11 hardening/metrics (Prometheus, rate limit,
+golden tests); Phase 10 custody (stretch). Deferred: decimal Mul/Div limb-math, ES256 JWT,
+CCXT/GoEx conformance run.
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -31,8 +33,8 @@ harness), Phase 11 hardening/metrics, Phase 10 custody (stretch).
 | 5 | Trade replay sync | ☑ | `internal/emulator.TapeReplay` injects tape via single-lock IOC (orderbook.ExecuteLimitIOC); resting user orders fill in sync at own price; wired into binary (per-instrument tape goroutines). CI green; live-verified; review applied (IOC, NaN guard). |
 | 6 | Configurable toxicity [b] | ☑ | `internal/toxicity` Kyle λ + VPIN; `emulator.ToxicInjector` seeded adverse sweep (scale·Score prob, scale·Impact ≤1 spread); config knobs wired; `scale:0`=pure RTR. CI green; review applied (bounded, guarded). |
 | 7 | Scenario & fault injection (test bed) | ◐ | price shift (`priceshift.go`, arb dislocation) + latency (`latency.go`) injectors done, wired, reviewed. Remaining: full trace replay, scenario scripting, cross-venue harness, ack/fill latency at API edges. |
-| 8 | Binance-compatible API | ◐ | `internal/api/binance` REST subset (ping/time/depth/ticker + signed order/cancel/openOrders/account); HMAC-SHA256 auth; symbol map; order registry w/ hook fill tracking; wired behind `api.binance.enabled`. CI green; live-verified (signed order → ACK, bad sig → -1022); reviewed. WS + user-data streams deferred. |
-| 9 | Coinbase-compatible API | ◐ | `internal/api/coinbase` Advanced Trade REST subset (time/product_book/products + signed orders/batch_cancel/historical/accounts); CB-ACCESS HMAC auth; order registry w/ hook fills; wired behind `api.coinbase.enabled` (:8083). CI green; live-verified (signed create → success_response, bad sign → 401); reviewed clean (no fixes needed). WS + JWT/ES256 deferred. |
+| 8 | Binance-compatible API | ☑ | `internal/api/binance` REST (signed order/cancel/openOrders/account + ping/time/depth/ticker) **and WS** (market @trade/@depth20 + user-data executionReport via listenKey). HMAC auth, symbol map, registry w/ hook fills. CI+race green; live-verified; reviewed (incl. WS concurrency clean). Deferred: @depth diffs, exchangeInfo, real balances. |
+| 9 | Coinbase-compatible API | ☑ | `internal/api/coinbase` Advanced Trade REST (signed orders/batch_cancel/historical/accounts + time/product_book/products) **and WS** (level2/market_trades/user channels, message-based subscribe). CB-ACCESS HMAC auth, registry w/ hook fills (:8083). CI+race green; live-verified; reviewed clean. Deferred: ES256 JWT, true level2 diffs. |
 | 10 | Custody examples (stretch) | ☐ | XLM / Solana / ERC20, testnet only |
 | 11 | Hardening & observability | ☐ | metrics, scenario tests |
 
