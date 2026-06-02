@@ -92,7 +92,10 @@ type Trade struct {
 	QuantityDecimal string    `json:"quantity_decimal,omitempty"`
 }
 
-// LOBLevel is one price level in an order book.
+// LOBLevel is one price level in an order book. It must stay a pure value
+// type (no slices, maps, or pointers): the reference book hands out levels
+// by shallow copy and relies on that being a deep copy for its immutability
+// guarantee. Adding a reference field would silently alias internal state.
 type LOBLevel struct {
 	Price           float64 `json:"price"`
 	Quantity        float64 `json:"quantity"`

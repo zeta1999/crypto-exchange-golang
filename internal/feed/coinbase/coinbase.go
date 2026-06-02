@@ -138,6 +138,12 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 	s.SetState("connected")
 	slog.Info("coinbase connected", "symbols", s.symbols, "channels", channels)
 
+	// sequence_num is the connection-global counter (contiguous across all
+	// products and frame types on this socket), so gap detection belongs
+	// here, not in the per-instrument reference book. Reset per connection.
+	var lastSeq uint64
+	var seqInit bool
+
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -148,6 +154,13 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 			return fmt.Errorf("read: %w", err)
 		}
 		s.RecordUpdate(len(msg), 0)
+		if seq, ok := peekSequence(msg); ok {
+			if seqInit && seq != lastSeq+1 {
+				s.RecordError()
+				slog.Warn("coinbase sequence gap", "expected", lastSeq+1, "got", seq)
+			}
+			lastSeq, seqInit = seq, true
+		}
 		events, perr := ParseMessage(msg)
 		if perr != nil {
 			s.RecordError()
@@ -161,6 +174,19 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 			}
 		}
 	}
+}
+
+// peekSequence extracts the connection-global sequence_num from a raw frame
+// for gap detection, without committing to a full parse. ok is false when
+// the field is absent (e.g. a non-data control frame).
+func peekSequence(raw []byte) (uint64, bool) {
+	var probe struct {
+		SequenceNum *uint64 `json:"sequence_num"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil || probe.SequenceNum == nil {
+		return 0, false
+	}
+	return *probe.SequenceNum, true
 }
 
 // --- wire types ---

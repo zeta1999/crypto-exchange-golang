@@ -78,24 +78,61 @@ func TestDiffBeforeSnapshotIsAnomaly(t *testing.T) {
 	}
 }
 
-func TestOutOfOrderSequenceDropped(t *testing.T) {
+func TestSequenceIsMetadataNotEnforced(t *testing.T) {
+	// SequenceNumber is connection-global (Coinbase), so the per-book code
+	// must NOT reject frames on it — gap detection lives in the adapter.
+	// A diff carrying a "lower" seq still applies; lastSeq is just metadata
+	// surfaced on Snapshot().
 	t0 := time.Unix(1700000000, 0).UTC()
 	b := NewBook("BTC-USD", "coinbase")
 	b.Apply(snap(10, t0, []feed.LOBLevel{lvl(100, 1)}, []feed.LOBLevel{lvl(101, 1)}))
-	// seq 9 < lastSeq 10: stale/duplicate, must be ignored.
-	if b.Apply(diff(9, t0, []feed.LOBLevel{lvl(100, 99)}, nil)) {
-		t.Error("out-of-order diff should be dropped")
+	if !b.Apply(diff(9, t0, []feed.LOBLevel{lvl(100, 7)}, nil)) {
+		t.Error("diff must apply regardless of connection-global seq ordering")
 	}
 	bid, _ := b.BestBid()
-	if bid.Quantity != 1 {
-		t.Errorf("book mutated by stale diff: qty=%v", bid.Quantity)
+	if bid.Quantity != 7 {
+		t.Errorf("diff not applied: qty=%v, want 7", bid.Quantity)
 	}
-	if b.Anomalies() != 1 {
-		t.Errorf("anomalies = %d, want 1", b.Anomalies())
+	if b.Anomalies() != 0 {
+		t.Errorf("anomalies = %d, want 0 (no per-book seq enforcement)", b.Anomalies())
 	}
-	// A forward diff still applies.
-	if !b.Apply(diff(11, t0, []feed.LOBLevel{lvl(100, 7)}, nil)) {
-		t.Error("forward diff should apply")
+	if b.Snapshot().SequenceNumber != 9 {
+		t.Errorf("snapshot seq = %d, want 9 (latest as metadata)", b.Snapshot().SequenceNumber)
+	}
+}
+
+func TestCrossedBookDetected(t *testing.T) {
+	t0 := time.Unix(1700000000, 0).UTC()
+	b := NewBook("BTC-USD", "coinbase")
+	b.Apply(snap(1, t0, []feed.LOBLevel{lvl(100, 1)}, []feed.LOBLevel{lvl(101, 1)}))
+	if b.Crossed() {
+		t.Fatal("normal book should not be crossed")
+	}
+	// A diff lifts the bid above the ask -> crossed.
+	b.Apply(diff(2, t0, []feed.LOBLevel{lvl(102, 1)}, nil))
+	if !b.Crossed() {
+		t.Error("book with bid 102 >= ask 101 should be crossed")
+	}
+	if b.Crossings() == 0 {
+		t.Error("crossing should be counted")
+	}
+	if sp, _ := b.Spread(); sp >= 0 {
+		t.Errorf("crossed spread should be negative, got %v", sp)
+	}
+}
+
+func TestKeyingCollapsesDecimalAndFloat(t *testing.T) {
+	// A level keyed via PriceDecimal "100.50" and a later removal carrying
+	// only the float 100.5 must hit the same key (no phantom level).
+	t0 := time.Unix(1700000000, 0).UTC()
+	b := NewBook("BTC-USD", "coinbase")
+	b.Apply(&feed.LOBSnapshot{Instrument: "BTC-USD", Exchange: "coinbase", Timestamp: t0, Snapshot: true,
+		Bids: []feed.LOBLevel{{Price: 100.5, Quantity: 2, PriceDecimal: "100.50"}},
+		Asks: []feed.LOBLevel{lvl(101, 1)}})
+	// Diff removes 100.5 using the float-only form.
+	b.Apply(diff(2, t0, []feed.LOBLevel{lvl(100.5, 0)}, nil))
+	if bids, _ := b.Depth(0); len(bids) != 0 {
+		t.Errorf("decimal/float key mismatch left a phantom level: %+v", bids)
 	}
 }
 

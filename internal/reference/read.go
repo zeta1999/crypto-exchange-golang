@@ -21,11 +21,32 @@ func (b *Book) Anomalies() uint64 {
 	return b.anomalies
 }
 
-// LastUpdate returns the timestamp of the most recently applied frame.
+// LastUpdate returns the venue-provided timestamp of the most recently
+// applied frame. Note this is event/feed time, not wall-clock receipt time;
+// Stale is measured against it.
 func (b *Book) LastUpdate() time.Time {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.lastUpdate
+}
+
+// Crossed reports whether the current touch is crossed (best bid >= best
+// ask), which indicates a degraded/glitched book. Consumers that price off
+// Mid/Spread should check this first.
+func (b *Book) Crossed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rebuild()
+	return b.crossed
+}
+
+// Crossings returns how many times a mutation has left the book crossed — a
+// health signal for the feed.
+func (b *Book) Crossings() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rebuild()
+	return b.crossings
 }
 
 // Stale reports whether the book has not updated within maxAge of now, or
@@ -85,7 +106,8 @@ func (b *Book) Mid() (float64, bool) {
 	return (bid.Price + ask.Price) / 2, true
 }
 
-// Spread returns best ask minus best bid, or ok=false if either side is empty.
+// Spread returns best ask minus best bid, or ok=false if either side is
+// empty. It can be negative if the book is crossed (see Crossed).
 func (b *Book) Spread() (float64, bool) {
 	bid, ask, ok := b.BestBidAsk()
 	if !ok {

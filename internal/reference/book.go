@@ -19,25 +19,28 @@ import (
 )
 
 // Book is a single instrument's reference limit order book. It is safe for
-// concurrent use: one writer (the feed consumer) calls Apply while many
-// readers (emulator, API edges) call the read methods.
+// concurrent use, but reads are serialized: every read takes an internal
+// mutex and may rebuild a cached sorted view, so high-fan-out concurrent
+// reads contend. Apply (one writer) and the read methods never deadlock —
+// only this book's mutex is ever held.
 type Book struct {
 	instrument string
 	exchange   string
 
 	mu   sync.Mutex
-	bids map[string]feed.LOBLevel // key: price string; price -> level
+	bids map[string]feed.LOBLevel // key: canonical price string; price -> level
 	asks map[string]feed.LOBLevel
 
-	initialized bool // a snapshot has been seen; diffs are applicable
-	seqInit     bool // a non-zero sequence number has been observed
-	lastSeq     uint64
-	anomalies   uint64 // diffs dropped (no base, or out-of-order sequence)
+	initialized bool   // a snapshot has been seen; diffs are applicable
+	lastSeq     uint64 // metadata only: see note in Apply
+	anomalies   uint64 // diffs dropped because no base snapshot was seen yet
+	crossings   uint64 // times a mutation left the book crossed (bid >= ask)
 	lastUpdate  time.Time
 
 	// Cached sorted view, rebuilt lazily on read after a mutation so a burst
 	// of diffs between two reads costs a single sort.
 	dirty      bool
+	crossed    bool
 	sortedBids []feed.LOBLevel // descending price
 	sortedAsks []feed.LOBLevel // ascending price
 }
@@ -55,14 +58,13 @@ func NewBook(instrument, exchange string) *Book {
 func (b *Book) Instrument() string { return b.instrument }
 func (b *Book) Exchange() string   { return b.exchange }
 
-// levelKey identifies a price level. The venue-committed decimal string is
-// preferred (exact, avoids float-equality hazards); otherwise the float is
-// formatted canonically. A single Book only ever mixes one venue's frames,
-// so the keying scheme stays consistent within a book.
+// levelKey identifies a price level by its canonical float rendering. Keying
+// on the float (rather than preferring the decimal string) guarantees one
+// key per logical price even if some frames carry a decimal string and
+// others don't — mixing the two schemes would let "100.50" and "100.5" map
+// to separate, independently-removable entries (a phantom-level bug). The
+// exact decimal is still preserved on the stored LOBLevel.
 func levelKey(l feed.LOBLevel) string {
-	if l.PriceDecimal != "" {
-		return l.PriceDecimal
-	}
 	return strconv.FormatFloat(l.Price, 'f', -1, 64)
 }
 
@@ -91,7 +93,6 @@ func (b *Book) Apply(s *feed.LOBSnapshot) bool {
 		}
 		b.initialized = true
 		b.lastSeq = s.SequenceNumber
-		b.seqInit = s.SequenceNumber > 0
 		b.stamp(s.Timestamp)
 		b.dirty = true
 		return true
@@ -102,17 +103,16 @@ func (b *Book) Apply(s *feed.LOBSnapshot) bool {
 		b.anomalies++ // can't apply a diff without a base snapshot
 		return false
 	}
-	// Sequence numbers (when present, e.g. Coinbase) are strictly
-	// increasing on a connection; a non-increasing value is a stale or
-	// duplicate frame and must not be applied. Binance carries no sequence
-	// (always 0), so the check is skipped there.
+	// NOTE on SequenceNumber: for Coinbase it is the *connection-global*
+	// counter copied onto every product's frame, not a per-instrument one.
+	// A per-book monotonic check is therefore meaningless — for one product
+	// the subsequence is strictly increasing but non-contiguous, so it can
+	// neither reject bad frames nor detect a dropped diff. We keep lastSeq
+	// only as metadata to stamp onto Snapshot(); genuine gap detection lives
+	// at the connection level in the Coinbase adapter, where the contiguous
+	// global counter actually is. Binance carries no sequence (always 0).
 	if s.SequenceNumber > 0 {
-		if b.seqInit && s.SequenceNumber <= b.lastSeq {
-			b.anomalies++
-			return false
-		}
 		b.lastSeq = s.SequenceNumber
-		b.seqInit = true
 	}
 	applySide(b.bids, s.Bids)
 	applySide(b.asks, s.Asks)
@@ -141,13 +141,21 @@ func (b *Book) stamp(ts time.Time) {
 	}
 }
 
-// rebuild refreshes the cached sorted view. Caller must hold b.mu.
+// rebuild refreshes the cached sorted view and the crossed flag. Caller must
+// hold b.mu. A crossed touch (best bid >= best ask) can arise from a dropped
+// diff or a feed glitch; we surface it rather than silently emitting a
+// negative spread to the convergence controller.
 func (b *Book) rebuild() {
 	if !b.dirty {
 		return
 	}
 	b.sortedBids = sortedLevels(b.bids, true)
 	b.sortedAsks = sortedLevels(b.asks, false)
+	b.crossed = len(b.sortedBids) > 0 && len(b.sortedAsks) > 0 &&
+		b.sortedBids[0].Price >= b.sortedAsks[0].Price
+	if b.crossed {
+		b.crossings++
+	}
 	b.dirty = false
 }
 
