@@ -7,11 +7,12 @@ _Last updated: 2026-06-02_
 exchange (feed → reference → seeded synthetic liquidity + RTR), tradable via gRPC/HTTP/WS, with
 all prices/quantities now exact `decimal.Decimal` (matching core + reference + emulator migrated;
 API edges convert; feed stays float64). Verified live (book 20 levels/side, uncrossed; HTTP emits
-exact decimal strings). Phases 1–6, `pkg/decimal`, and the float64→Decimal migration done & reviewed.
-Phase 6 adds configurable toxicity (Kyle λ + VPIN) with a seeded adverse-
-selection injector (bounded to ≤1 spread; `scale:0` ⇒ pure RTR). **Next:**
-Phase 7 — scenario & fault injection (trace replay, latency, price shift);
-then 8–11.
+exact decimal strings). Phases 1–6 + Phase 7 core, `pkg/decimal`, and the float64→Decimal migration
+done & reviewed. Phase 7 core adds the artificial **price shift** (manufacture
+cross-venue arb dislocations) and **latency** injectors (config, wired,
+default-off, all reviewed). **Remaining Phase 7:** full trace replay, scenario
+scripting, cross-venue harness, order-ack/fill-report latency at API edges.
+**Next:** finish Phase 7 or Phases 8–9 (Binance/Coinbase-compatible APIs).
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -26,7 +27,7 @@ then 8–11.
 | 4 | Return-to-Reference [a] | ☑ | `Seeder.Converge(alpha)` (target=cur+α·(ref−cur)); fill accounting via generation-stamped IDs + trade hook; `RTR` exp-decay controller (α=1−e^(−dt/τ)). CI green; DoD scenario (user trade → gradual reconverge) deterministic; review applied. |
 | 5 | Trade replay sync | ☑ | `internal/emulator.TapeReplay` injects tape via single-lock IOC (orderbook.ExecuteLimitIOC); resting user orders fill in sync at own price; wired into binary (per-instrument tape goroutines). CI green; live-verified; review applied (IOC, NaN guard). |
 | 6 | Configurable toxicity [b] | ☑ | `internal/toxicity` Kyle λ + VPIN; `emulator.ToxicInjector` seeded adverse sweep (scale·Score prob, scale·Impact ≤1 spread); config knobs wired; `scale:0`=pure RTR. CI green; review applied (bounded, guarded). |
-| 7 | Scenario & fault injection (test bed) | ☐ | trace replay, artificial latency, price-shift / arb scenarios |
+| 7 | Scenario & fault injection (test bed) | ◐ | price shift (`priceshift.go`, arb dislocation) + latency (`latency.go`) injectors done, wired, reviewed. Remaining: full trace replay, scenario scripting, cross-venue harness, ack/fill latency at API edges. |
 | 8 | Binance-compatible API | ☐ | REST + WS subset |
 | 9 | Coinbase-compatible API | ☐ | Advanced Trade REST + WS subset |
 | 10 | Custody examples (stretch) | ☐ | XLM / Solana / ERC20, testnet only |
