@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
@@ -20,13 +21,15 @@ type Engine interface {
 // Server is a Binance-spot-compatible REST edge. It is an http.Handler that
 // routes the api/v3 subset to the engine.
 type Server struct {
-	engine   Engine
-	symbols  *SymbolMap
-	auth     *Authenticator
-	registry *Registry
-	mux      *http.ServeMux
-	now      func() time.Time
-	balances []Balance
+	engine      Engine
+	symbols     *SymbolMap
+	auth        *Authenticator
+	registry    *Registry
+	mux         *http.ServeMux
+	now         func() time.Time
+	balances    []Balance
+	broadcaster *Broadcaster
+	listenKeys  *listenKeyManager
 }
 
 // Balance is a Binance account balance entry. The engine has no ledger, so the
@@ -69,6 +72,8 @@ func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Regis
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.broadcaster = NewBroadcaster()
+	s.listenKeys = newListenKeyManager(s.now)
 
 	// Public (unsigned) endpoints.
 	s.mux.HandleFunc("/api/v3/ping", s.handlePing)
@@ -82,15 +87,28 @@ func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Regis
 	s.mux.HandleFunc("/api/v3/openOrders", s.handleOpenOrders)
 	s.mux.HandleFunc("/api/v3/account", s.handleAccount)
 
+	// listenKey lifecycle for the user-data stream (requires X-MBX-APIKEY, not a
+	// signature — matching Binance).
+	s.mux.HandleFunc("/api/v3/userDataStream", s.handleUserDataStream)
+
+	// WebSocket streams: raw single stream / listenKey, and combined.
+	s.mux.HandleFunc("/ws/", s.handleRawStream)
+	s.mux.HandleFunc("/stream", s.handleCombinedStream)
+
 	return s
 }
 
 // Handler exposes the mux for httptest servers.
 func (s *Server) Handler() http.Handler { return s.mux }
 
-// AttachHooks registers the registry's trade/cancel hooks on an order book. A
-// caller that constructs the book wires this once at startup.
+// AttachHooks registers the edge's order-book hooks. TWO hooks are registered,
+// and ORDER MATTERS: hooks fire in registration order (see orderbook.fire), so
+// the registry's state-updating hook is registered FIRST and the WebSocket
+// emission hook SECOND. The WS hook reads the registry snapshot for
+// executionReport, so it must run after the registry has folded the
+// trade/cancel into the record. A caller wires this once at startup.
 func (s *Server) AttachHooks(book *orderbook.OrderBook) {
+	// 1) Registry hook: update per-order fill/cancel state.
 	book.RegisterHook(func(evt string, data interface{}) {
 		switch evt {
 		case "trade":
@@ -103,11 +121,40 @@ func (s *Server) AttachHooks(book *orderbook.OrderBook) {
 			}
 		}
 	})
+
+	// 2) WebSocket hook: broadcast market @trade events and, for Binance-edge
+	// orders, user-data executionReport updates (reading the now-updated record).
+	book.RegisterHook(func(evt string, data interface{}) {
+		switch evt {
+		case "trade":
+			t, ok := data.(*orderbook.Trade)
+			if !ok {
+				return
+			}
+			s.onBookTrade(t) // public @trade market stream
+			// executionReport for whichever side(s) belong to the Binance edge.
+			for _, id := range []string{t.BuyOrderID, t.SellOrderID} {
+				if isEdgeOrder(id) {
+					s.emitExecutionReport(id, execTypeTrade)
+				}
+			}
+		case "cancel":
+			if o, ok := data.(*orderbook.Order); ok && isEdgeOrder(o.ID) {
+				s.emitExecutionReport(o.ID, execTypeCanceled)
+			}
+		}
+	})
 }
 
-// ListenAndServe runs the edge with graceful shutdown, mirroring httpserver.
+// isEdgeOrder reports whether an engine order id originates from the Binance
+// edge (so synthetic emulator/tape/toxic order ids are ignored by WS emission).
+func isEdgeOrder(id string) bool { return strings.HasPrefix(id, enginePrefix) }
+
+// ListenAndServe runs the edge with graceful shutdown, mirroring httpserver. It
+// also starts the WebSocket @depth push ticker on ctx.
 func ListenAndServe(ctx context.Context, addr string, srv *Server, certFile, keyFile string) error {
 	server := &http.Server{Addr: addr, Handler: srv.mux}
+	go srv.Start(ctx) // periodic @depth20 broadcast loop
 	go func() {
 		<-ctx.Done()
 		_ = server.Shutdown(context.Background())

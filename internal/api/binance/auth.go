@@ -39,6 +39,20 @@ func NewAuthenticator(apiKey, secret string, now func() time.Time) *Authenticato
 	return &Authenticator{apiKey: apiKey, secret: []byte(secret), now: now}
 }
 
+// VerifyAPIKey checks only the X-MBX-APIKEY header (no signature). Binance's
+// listenKey (userDataStream) endpoints are USER_STREAM-security: they require
+// the api key but NOT a signature.
+func (a *Authenticator) VerifyAPIKey(r *http.Request) error {
+	key := r.Header.Get("X-MBX-APIKEY")
+	if key == "" {
+		return &apiError{Code: codeBadAPIKeyFmt, Msg: "API-key format invalid.", status: http.StatusUnauthorized}
+	}
+	if subtle.ConstantTimeCompare([]byte(key), []byte(a.apiKey)) != 1 {
+		return &apiError{Code: codeRejectedKey, Msg: "Invalid API-key, IP, or permissions for action.", status: http.StatusUnauthorized}
+	}
+	return nil
+}
+
 // Verify validates a SIGNED request:
 //   - X-MBX-APIKEY header is present and matches the configured key,
 //   - the signature query param equals HMAC_SHA256 over the on-wire query

@@ -186,6 +186,19 @@ func (r *Registry) Get(orderID int64) (*orderRecord, bool) {
 	return rec, ok
 }
 
+// getByEngine returns a value copy of the record for an engine order ID (e.g.
+// "binance:42"). Used by the WS edge to build an executionReport after the
+// registry hook has folded a trade/cancel into the record.
+func (r *Registry) getByEngine(engineID string) (orderRecord, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.byEngine[engineID]
+	if !ok {
+		return orderRecord{}, false
+	}
+	return *rec, true
+}
+
 // GetByClientOrderID returns the record for a client order ID.
 func (r *Registry) GetByClientOrderID(clientOrderID string) (*orderRecord, bool) {
 	r.mu.Lock()
