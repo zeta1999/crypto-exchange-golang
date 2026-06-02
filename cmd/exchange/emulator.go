@@ -11,6 +11,7 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed/binance"
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed/coinbase"
+	"github.com/zeta1999/crypto-exchange-golang/internal/feed/replay"
 	"github.com/zeta1999/crypto-exchange-golang/internal/metrics"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/reference"
@@ -65,14 +66,21 @@ func (m syntheticExemptMargin) Validate(ctx context.Context, ord *orderbook.Orde
 // newFeedSource builds the venue feed for the configured instruments,
 // subscribing to order-book updates (the reference book's input) and trades
 // (the tape replayed against resting orders).
-func newFeedSource(venue string, instruments []string) (feed.Source, error) {
-	switch venue {
+func newFeedSource(cfg config.Emulator) (feed.Source, error) {
+	switch cfg.Venue {
 	case "coinbase":
-		return coinbase.New(coinbase.Config{Symbols: instruments, FeedTypes: []string{"orderbook", "trades"}}), nil
+		return coinbase.New(coinbase.Config{Symbols: cfg.Instruments, FeedTypes: []string{"orderbook", "trades"}}), nil
 	case "binance":
-		return binance.New(binance.Config{Symbols: instruments, FeedTypes: []string{"orderbook", "trades"}}), nil
+		return binance.New(binance.Config{Symbols: cfg.Instruments, FeedTypes: []string{"orderbook", "trades"}}), nil
+	case "replay":
+		// Run the whole emulator offline from a recorded trace (Phase 1's
+		// replay.Source), deterministically — ideal for reproducible OMS tests.
+		if cfg.Replay.File == "" {
+			return nil, fmt.Errorf("emulator venue=replay requires replay.file")
+		}
+		return replay.New(cfg.Replay.File), nil
 	default:
-		return nil, fmt.Errorf("unknown emulator venue %q (want coinbase|binance)", venue)
+		return nil, fmt.Errorf("unknown emulator venue %q (want coinbase|binance|replay)", cfg.Venue)
 	}
 }
 
@@ -84,7 +92,7 @@ func newFeedSource(venue string, instruments []string) (feed.Source, error) {
 // The emulator instruments must be registered engine symbols (1:1 venue↔engine
 // symbol mapping). Returns the seeders keyed by symbol for the trade hook.
 func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulator, eng *engine.Engine, book *orderbook.OrderBook, reg *metrics.Registry) (map[string]*emulator.Seeder, error) {
-	src, err := newFeedSource(cfg.Venue, cfg.Instruments)
+	src, err := newFeedSource(cfg)
 	if err != nil {
 		return nil, err
 	}

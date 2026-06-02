@@ -92,3 +92,6 @@ emulator:
   scenario:                    # scripted test-bed timeline (Phase 7); empty file = static controls (no runner)
     file: ""                   # path to a JSONL scenario; each line: {"at_ms":N,"action":"price_shift|latency","params":{...}}
     speed: 1.0                 # schedule scaling: 1.0 = real time, >1 accelerates (10 runs a 10s timeline in 1s)
+  replay:                      # used only when venue: replay — run the whole emulator offline from a recorded trace
+    file: ""                   # JSONL trace (cmd/feedcat -record output); required when venue=replay
+    speed: 1.0                 # reserved (current replay is fast-as-possible / deterministic)

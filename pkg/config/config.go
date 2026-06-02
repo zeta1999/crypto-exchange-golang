@@ -110,7 +110,7 @@ type CoinbaseConfig struct {
 // disabled, the exchange runs as a plain matching engine. See PLAN.md.
 type Emulator struct {
 	Enabled     bool               `yaml:"enabled"`
-	Venue       string             `yaml:"venue"` // "coinbase" | "binance"
+	Venue       string             `yaml:"venue"` // "coinbase" | "binance" | "replay"
 	Instruments []string           `yaml:"instruments"`
 	Reference   EmulatorReference  `yaml:"reference"`
 	RTR         EmulatorRTR        `yaml:"rtr"`
@@ -118,6 +118,15 @@ type Emulator struct {
 	PriceShift  EmulatorPriceShift `yaml:"price_shift"`
 	Latency     EmulatorLatency    `yaml:"latency"`
 	Scenario    EmulatorScenario   `yaml:"scenario"`
+	Replay      EmulatorReplay     `yaml:"replay"`
+}
+
+// EmulatorReplay configures the replay venue: feed the whole emulator from a
+// recorded JSONL trace (cmd/feedcat -record output) instead of a live venue,
+// deterministically and offline. Used when Venue == "replay".
+type EmulatorReplay struct {
+	File  string  `yaml:"file"`  // recorded trace path (required for venue=replay)
+	Speed float64 `yaml:"speed"` // playback multiplier (reserved; current replay is fast-as-possible)
 }
 
 // EmulatorScenario configures the scripted test-bed timeline (PLAN §5 Phase 7).
@@ -245,8 +254,12 @@ func (c *Config) validateEmulator(engine map[string]bool, add func(string, ...in
 	}
 	switch em.Venue {
 	case "coinbase", "binance":
+	case "replay":
+		if em.Replay.File == "" {
+			add("emulator.replay.file is required when venue=replay")
+		}
 	default:
-		add("emulator.venue %q is unknown (want coinbase|binance)", em.Venue)
+		add("emulator.venue %q is unknown (want coinbase|binance|replay)", em.Venue)
 	}
 	if len(em.Instruments) == 0 {
 		add("emulator.instruments must not be empty when the emulator is enabled")

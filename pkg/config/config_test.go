@@ -65,6 +65,7 @@ func TestValidateInvalid(t *testing.T) {
 		{"no instruments", func(c *Config) { c.Instruments = nil }, "at least one instrument"},
 		{"empty grpc", func(c *Config) { c.Network.ListenGRPC = "" }, "listen_grpc"},
 		{"unknown venue", func(c *Config) { c.Emulator.Venue = "kraken" }, "venue"},
+		{"replay no file", func(c *Config) { c.Emulator.Venue = "replay"; c.Emulator.Replay.File = "" }, "replay.file"},
 		{"emu instrument not engine", func(c *Config) { c.Emulator.Instruments = []string{"DOGE-USD"} }, "not a configured engine instrument"},
 		{"negative depth", func(c *Config) { c.Emulator.Reference.DepthLevels = -1 }, "depth_levels"},
 		{"negative tau", func(c *Config) { c.Emulator.RTR.TauMs = -5 }, "tau_ms"},
