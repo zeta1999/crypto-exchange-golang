@@ -27,7 +27,7 @@ type wsHarness struct {
 	nowMs    int64
 }
 
-func newWSHarness(t *testing.T) *wsHarness {
+func newWSHarness(t *testing.T, opts ...Option) *wsHarness {
 	t.Helper()
 	nowMs := int64(1_700_000_000_000)
 	clock := func() time.Time { return time.UnixMilli(nowMs).UTC() }
@@ -37,7 +37,7 @@ func newWSHarness(t *testing.T) *wsHarness {
 	symbols := newTestSymbolMap()
 	authn := NewAuthenticator(testAPIKey, testSecret, clock)
 	registry := NewRegistry(clock)
-	bsrv := New(eng, symbols, authn, registry, WithClock(clock))
+	bsrv := New(eng, symbols, authn, registry, append([]Option{WithClock(clock)}, opts...)...)
 	bsrv.AttachHooks(book)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -251,6 +251,49 @@ func TestWSUserDataExecutionReport(t *testing.T) {
 	}
 	if filled.CumFilledQty != "3.00000000" {
 		t.Fatalf("cumFilledQty = %s want 3", filled.CumFilledQty)
+	}
+}
+
+// TestWSFillReportDelay verifies WithFillDelay holds back the fill (TRADE)
+// executionReport by the configured latency while the NEW report stays prompt.
+func TestWSFillReportDelay(t *testing.T) {
+	const delay = 200 * time.Millisecond
+	h := newWSHarness(t, WithFillDelay(func() time.Duration { return delay }))
+	key := h.postListenKey(t)
+	c := h.dial(t, "/ws/"+key)
+
+	mustAdd(t, h.book, "seed-ask", orderbook.SideSell, "101", "5")
+
+	start := time.Now()
+	params := url.Values{}
+	params.Set("symbol", "BTCUSDT")
+	params.Set("side", "BUY")
+	params.Set("type", "MARKET")
+	params.Set("quantity", "3")
+	resp := h.signedDo(t, http.MethodPost, "/api/v3/order", params)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("place status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// NEW arrives promptly (it is not a fill report).
+	var first executionReport
+	readJSON(t, c, &first)
+	if first.ExecType != execTypeNew {
+		t.Fatalf("first report x = %s want NEW", first.ExecType)
+	}
+	if dt := time.Since(start); dt > delay {
+		t.Errorf("NEW report was delayed (%v); only fill reports should be", dt)
+	}
+
+	// TRADE arrives only after the fill-report delay has elapsed.
+	var filled executionReport
+	readJSON(t, c, &filled)
+	if filled.ExecType != execTypeTrade {
+		t.Fatalf("second report x = %s want TRADE", filled.ExecType)
+	}
+	if dt := time.Since(start); dt < delay {
+		t.Errorf("fill report arrived after %v, want >= %v (not delayed)", dt, delay)
 	}
 }
 

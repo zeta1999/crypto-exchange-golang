@@ -139,17 +139,24 @@ func main() {
 		return nil
 	})
 
-	// Artificial order-ack latency for the API edges (Phase 7): the static
-	// emulator.latency.order_ack_ms (+ jitter), applied on the edge handler
-	// goroutines. Scenario-driven mutation of edge latency is a future item;
-	// fill-report latency stays deferred (it can't sleep in the book hook).
-	var apiAckDelay func() time.Duration
-	if cfg.Emulator.Latency.OrderAckMs > 0 {
+	// Artificial latency for the API edges (Phase 7): the static
+	// emulator.latency knobs (+ jitter). order_ack_ms is applied synchronously
+	// on the edge handler goroutine; fill_report_ms holds back delivery of the
+	// fill (TRADE) user-data update asynchronously (the book hook can't sleep).
+	// Scenario-driven mutation of edge latency is a future item.
+	var apiAckDelay, apiFillDelay func() time.Duration
+	if cfg.Emulator.Latency.OrderAckMs > 0 || cfg.Emulator.Latency.FillReportMs > 0 {
 		edgeLat := emulator.NewLatency(emulator.LatencyConfig{
-			OrderAck: time.Duration(cfg.Emulator.Latency.OrderAckMs) * time.Millisecond,
-			Jitter:   time.Duration(cfg.Emulator.Latency.JitterMs) * time.Millisecond,
+			OrderAck:   time.Duration(cfg.Emulator.Latency.OrderAckMs) * time.Millisecond,
+			FillReport: time.Duration(cfg.Emulator.Latency.FillReportMs) * time.Millisecond,
+			Jitter:     time.Duration(cfg.Emulator.Latency.JitterMs) * time.Millisecond,
 		}, cfg.Emulator.Toxicity.Seed)
-		apiAckDelay = edgeLat.OrderAckDelay
+		if cfg.Emulator.Latency.OrderAckMs > 0 {
+			apiAckDelay = edgeLat.OrderAckDelay
+		}
+		if cfg.Emulator.Latency.FillReportMs > 0 {
+			apiFillDelay = edgeLat.FillReportDelay
+		}
 	}
 
 	// Optional Binance-spot-compatible REST edge (Phase 8, a documented
@@ -169,6 +176,9 @@ func main() {
 		}
 		if apiAckDelay != nil {
 			opts = append(opts, binance.WithAckDelay(apiAckDelay))
+		}
+		if apiFillDelay != nil {
+			opts = append(opts, binance.WithFillDelay(apiFillDelay))
 		}
 		binanceSrv := binance.New(newMeteredEngine(eng, ordersPlaced, "binance"), symbolMap, authn, registry, opts...)
 		binanceSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking
@@ -202,6 +212,9 @@ func main() {
 		}
 		if apiAckDelay != nil {
 			opts = append(opts, coinbase.WithAckDelay(apiAckDelay))
+		}
+		if apiFillDelay != nil {
+			opts = append(opts, coinbase.WithFillDelay(apiFillDelay))
 		}
 		coinbaseSrv := coinbase.New(newMeteredEngine(eng, ordersPlaced, "coinbase"), products, authn, registry, opts...)
 		coinbaseSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking

@@ -36,6 +36,7 @@ type Server struct {
 	metrics     *Metrics
 	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
 	ackDelay    func() time.Duration
+	fillDelay   func() time.Duration
 }
 
 // Balance is a Binance account balance entry. The engine has no ledger, so the
@@ -69,6 +70,24 @@ func WithBalances(b []Balance) Option {
 // slow venue edge (Phase 7). delay() may return jitter. nil/zero = no delay.
 func WithAckDelay(delay func() time.Duration) Option {
 	return func(s *Server) { s.ackDelay = delay }
+}
+
+// WithFillDelay injects an artificial fill-report latency: a fill (TRADE)
+// executionReport is built at fill time (so its E/z/X fields are fill-time
+// values) but its delivery to user-data subscribers is held back by delay(),
+// simulating a venue whose order updates lag the actual execution (Phase 7).
+// delay() may return jitter. nil/zero = no delay. Only fill reports are
+// delayed; NEW/CANCELED updates deliver promptly.
+//
+// Caveat: delivery uses an independent timer per fill, so unlike the rest of
+// the engine this path is NOT deterministic — under jitter (or bursts of
+// near-simultaneous fills) reports may be DELIVERED OUT OF EXECUTION ORDER.
+// Each frame still carries cumulative z/X, so treat a frame as the
+// authoritative snapshot at its event time; do not reconstruct a ledger from
+// the per-fill l/L across reordered frames. This models a reorder-on-the-wire
+// venue, which is intentional for a test bed.
+func WithFillDelay(delay func() time.Duration) Option {
+	return func(s *Server) { s.fillDelay = delay }
 }
 
 // sleepAck applies the configured order-ack latency on the (HTTP handler)

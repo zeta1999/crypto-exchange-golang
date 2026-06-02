@@ -26,7 +26,7 @@ type wsHarness struct {
 	tsSec int64
 }
 
-func newWSHarness(t *testing.T) *wsHarness {
+func newWSHarness(t *testing.T, opts ...Option) *wsHarness {
 	t.Helper()
 	tsSec := int64(1_700_000_000)
 	clock := func() time.Time { return time.Unix(tsSec, 0).UTC() }
@@ -36,7 +36,7 @@ func newWSHarness(t *testing.T) *wsHarness {
 	products := NewProducts([]string{"BTC-USD", "ETH-USD"})
 	authn := NewAuthenticator(testAPIKey, testSecret, testPassphrase, clock)
 	registry := NewRegistry(clock)
-	csrv := New(eng, products, authn, registry, WithClock(clock))
+	csrv := New(eng, products, authn, registry, append([]Option{WithClock(clock)}, opts...)...)
 	csrv.AttachHooks(book)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -203,6 +203,63 @@ func TestWSMarketTradesAggressorSell(t *testing.T) {
 	}
 	if tr.TradeID == "" {
 		t.Fatalf("trade_id empty")
+	}
+}
+
+// TestWSUserFillReportDelay verifies WithFillDelay holds back the fill-driven
+// user-channel update by the configured latency, while the initial OPEN (from
+// the REST create) stays prompt. A resting limit order keeps the prompt OPEN
+// (cum 0) cleanly distinct from the delayed FILLED (cum 3).
+func TestWSUserFillReportDelay(t *testing.T) {
+	const delay = 200 * time.Millisecond
+	h := newWSHarness(t, WithFillDelay(func() time.Duration { return delay }))
+	c := h.dial(t)
+	wsSend(t, c, map[string]interface{}{
+		"type":        "subscribe",
+		"channel":     "user",
+		"api_key":     testAPIKey,
+		"product_ids": []string{"BTC-USD"},
+	})
+	_ = wsReadChannel(t, c, "subscriptions")
+
+	// A resting LIMIT BUY at 100 with no crossing liquidity → prompt OPEN.
+	body := `{"client_order_id":"cli-1","product_id":"BTC-USD","side":"BUY",` +
+		`"order_configuration":{"limit_limit_gtc":{"base_size":"3","limit_price":"100"}}}`
+	openStart := time.Now()
+	resp := h.signedDoWS(t, http.MethodPost, "/api/v3/brokerage/orders", body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("place status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	env := wsReadChannel(t, c, "user")
+	var open userEvent
+	if err := json.Unmarshal(env.Events[0], &open); err != nil {
+		t.Fatalf("decode open: %v", err)
+	}
+	if len(open.Orders) == 0 || open.Orders[0].Status != statusOpen {
+		t.Fatalf("first user frame = %s, want OPEN", env.Events[0])
+	}
+	if dt := time.Since(openStart); dt > delay {
+		t.Errorf("OPEN update was delayed (%v); only fill updates should be", dt)
+	}
+
+	// Fill the resting order with a book taker → fill update is delayed.
+	fillStart := time.Now()
+	wsAddOrder(t, h.book, "taker-sell", orderbook.SideSell, "100", "3")
+	env = wsReadChannel(t, c, "user")
+	var filled userEvent
+	if err := json.Unmarshal(env.Events[0], &filled); err != nil {
+		t.Fatalf("decode fill: %v", err)
+	}
+	if len(filled.Orders) == 0 || filled.Orders[0].Status != statusFilled {
+		t.Fatalf("fill frame = %s, want FILLED", env.Events[0])
+	}
+	if filled.Orders[0].CumulativeQuantity != "3.00000000" {
+		t.Errorf("cum qty = %s, want 3", filled.Orders[0].CumulativeQuantity)
+	}
+	if dt := time.Since(fillStart); dt < delay {
+		t.Errorf("fill update arrived after %v, want >= %v (not delayed)", dt, delay)
 	}
 }
 

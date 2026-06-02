@@ -533,6 +533,17 @@ func (s *Server) emitExecutionReport(engineID, execType string, lastFillQty, las
 	if err != nil {
 		return
 	}
+	// Fill reports may be held back by the configured fill-report latency; the
+	// report was built from the fill-time state above, so a delayed delivery
+	// still reflects what happened at execution, just later. NEW/CANCELED
+	// updates are never delayed. The hook runs under the engine lock, so the
+	// delay must be asynchronous (time.AfterFunc), never a synchronous sleep.
+	if execType == execTypeTrade && s.fillDelay != nil {
+		if d := s.fillDelay(); d > 0 {
+			time.AfterFunc(d, func() { s.broadcaster.publishUserData(b) })
+			return
+		}
+	}
 	s.broadcaster.publishUserData(b)
 }
 

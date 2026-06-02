@@ -36,6 +36,7 @@ type Server struct {
 	metrics     *Metrics
 	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
 	ackDelay    func() time.Duration
+	fillDelay   func() time.Duration
 }
 
 // nextTradeID synthesizes a monotonic trade_id for a market_trades frame (the
@@ -84,6 +85,36 @@ func WithAccounts(a []Account) Option {
 // delay() before responding (Phase 7 slow-venue knob). nil/zero = none.
 func WithAckDelay(delay func() time.Duration) Option {
 	return func(s *Server) { s.ackDelay = delay }
+}
+
+// WithFillDelay injects artificial fill-report latency: a fill-driven
+// user-channel update's delivery to subscribers is held back by delay(),
+// simulating a venue whose order updates lag execution (Phase 7). nil/zero =
+// none. Only fill updates are delayed; the initial OPEN and cancel updates
+// deliver promptly.
+//
+// Caveat: delivery uses an independent timer per fill, so this path is NOT
+// deterministic — under jitter (or bursts) updates may be DELIVERED OUT OF
+// EXECUTION ORDER, and the frame's timestamp/sequence are stamped at delivery
+// time, not fill time. Each frame carries cumulative_quantity + status, so
+// treat it as the authoritative snapshot. This intentionally models a
+// reorder-on-the-wire venue for the test bed.
+func WithFillDelay(delay func() time.Duration) Option {
+	return func(s *Server) { s.fillDelay = delay }
+}
+
+// deliverUserFill emits a fill-driven user-channel update for rec, applying the
+// configured fill-report latency. The book hook runs under the engine lock, so
+// a configured delay must be asynchronous (time.AfterFunc), never a synchronous
+// sleep; rec is a value snapshot, so the delayed frame reflects fill-time state.
+func (s *Server) deliverUserFill(rec orderRecord) {
+	if s.fillDelay != nil {
+		if d := s.fillDelay(); d > 0 {
+			time.AfterFunc(d, func() { s.emitUser(rec) })
+			return
+		}
+	}
+	s.emitUser(rec)
 }
 
 // sleepAck applies the order-ack latency on the HTTP handler goroutine

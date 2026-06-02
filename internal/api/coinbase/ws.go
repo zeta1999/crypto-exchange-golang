@@ -492,7 +492,7 @@ func (s *Server) emitUserForTrade(t *orderbook.Trade) {
 	}
 	for _, id := range []string{t.BuyOrderID, t.SellOrderID} {
 		if rec, ok := s.registry.getByEngine(id); ok {
-			s.emitUser(rec)
+			s.deliverUserFill(rec)
 		}
 	}
 }
