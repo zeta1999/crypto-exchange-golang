@@ -13,6 +13,7 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/margin"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/wal"
 )
 
@@ -32,18 +33,18 @@ func TestMatchingFlowIntegration(t *testing.T) {
 	eng := engine.New(book, validator, writer)
 
 	ctx := context.Background()
-	if _, _, err := eng.PlaceLimit(ctx, &orderbook.Order{ID: "maker", Instrument: "BTC-USD", Price: 40_000, Volume: 1, Side: orderbook.SideBuy}); err != nil {
+	if _, _, err := eng.PlaceLimit(ctx, &orderbook.Order{ID: "maker", Instrument: "BTC-USD", Price: decimal.FromInt(40_000), Volume: decimal.FromInt(1), Side: orderbook.SideBuy}); err != nil {
 		t.Fatalf("place maker: %v", err)
 	}
-	trades, snap, err := eng.PlaceLimit(ctx, &orderbook.Order{ID: "taker", Instrument: "BTC-USD", Price: 39_000, Volume: 1, Side: orderbook.SideSell})
+	trades, snap, err := eng.PlaceLimit(ctx, &orderbook.Order{ID: "taker", Instrument: "BTC-USD", Price: decimal.FromInt(39_000), Volume: decimal.FromInt(1), Side: orderbook.SideSell})
 	if err != nil {
 		t.Fatalf("place taker: %v", err)
 	}
 	if len(trades) != 1 {
 		t.Fatalf("expected 1 trade got %d", len(trades))
 	}
-	if snap.BestBid != 0 {
-		t.Fatalf("expected empty book best bid got %f", snap.BestBid)
+	if !snap.BestBid.IsZero() {
+		t.Fatalf("expected empty book best bid got %s", snap.BestBid)
 	}
 }
 
@@ -60,7 +61,7 @@ func TestCancelOrderRemovesLiquidity(t *testing.T) {
 	eng := engine.New(book, validator, writer)
 	ctx := context.Background()
 
-	if _, _, err := eng.PlaceLimit(ctx, &orderbook.Order{ID: "cancel-me", Instrument: "BTC-USD", Price: 41_000, Volume: 1, Side: orderbook.SideBuy}); err != nil {
+	if _, _, err := eng.PlaceLimit(ctx, &orderbook.Order{ID: "cancel-me", Instrument: "BTC-USD", Price: decimal.FromInt(41_000), Volume: decimal.FromInt(1), Side: orderbook.SideBuy}); err != nil {
 		t.Fatalf("place order: %v", err)
 	}
 	if _, err := eng.CancelOrder(ctx, "BTC-USD", "cancel-me"); err != nil {

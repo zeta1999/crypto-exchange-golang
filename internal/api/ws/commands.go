@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // Engine mirrors the HTTP/gRPC contract.
@@ -72,8 +73,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ord := &orderbook.Order{
 				ID:         msg.ClientID,
 				Instrument: msg.Instrument,
-				Price:      msg.Price,
-				Volume:     msg.Volume,
+				Price:      decimal.FromFloat(msg.Price),
+				Volume:     decimal.FromFloat(msg.Volume),
 				Side:       orderbook.Side(msg.Side),
 			}
 			trades, snap, err := h.engine.PlaceLimit(r.Context(), ord)
@@ -86,7 +87,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ord := &orderbook.Order{
 				ID:         msg.ClientID,
 				Instrument: msg.Instrument,
-				Volume:     msg.Volume,
+				Volume:     decimal.FromFloat(msg.Volume),
 				Side:       orderbook.Side(msg.Side),
 				IsMarket:   true,
 			}

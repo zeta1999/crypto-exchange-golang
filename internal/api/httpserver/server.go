@@ -8,6 +8,7 @@ import (
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // Engine matches the subset of the business logic consumed by HTTP.
@@ -91,8 +92,8 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 	ord := &orderbook.Order{
 		ID:         req.ClientID,
 		Instrument: req.Instrument,
-		Price:      req.Price,
-		Volume:     req.Volume,
+		Price:      decimal.FromFloat(req.Price),
+		Volume:     decimal.FromFloat(req.Volume),
 		Side:       orderbook.Side(req.Side),
 		IsMarket:   req.Market,
 	}

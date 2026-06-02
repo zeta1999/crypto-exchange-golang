@@ -10,6 +10,7 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/reference"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // newWiredEngine builds an engine and returns the underlying book so a test
@@ -25,9 +26,10 @@ func askVol(t *testing.T, eng *engine.Engine, price float64) float64 {
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
+	want := decimal.FromFloat(price)
 	for _, l := range snap.Asks {
-		if l.Price == price {
-			return l.Volume
+		if l.Price.Eq(want) {
+			return l.Volume.Float64()
 		}
 	}
 	return 0
@@ -74,7 +76,7 @@ func TestRTRReturnsToReferenceAfterUserTrade(t *testing.T) {
 
 	// User market buy eats 2 of the 3 resting at the best ask (101).
 	if _, _, err := eng.PlaceMarket(context.Background(), &orderbook.Order{
-		ID: "user1", Instrument: "BTC-USD", Side: orderbook.SideBuy, Volume: 2,
+		ID: "user1", Instrument: "BTC-USD", Side: orderbook.SideBuy, Volume: decimal.FromInt(2),
 	}); err != nil {
 		t.Fatalf("user trade: %v", err)
 	}
@@ -115,13 +117,13 @@ func TestRTRReturnsToReferenceAfterUserTrade(t *testing.T) {
 	_ = r
 }
 
-func cmpApprox(t *testing.T, side string, got []orderbook.Level, want []feed.LOBLevel) {
+func cmpApprox(t *testing.T, side string, got []orderbook.Level, want []reference.Level) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("%s levels: got %d, want %d", side, len(got), len(want))
 	}
 	for i := range want {
-		if got[i].Price != want[i].Price || math.Abs(got[i].Volume-want[i].Quantity) > 1e-6 {
+		if !got[i].Price.Eq(want[i].Price) || math.Abs(got[i].Volume.Float64()-want[i].Quantity.Float64()) > 1e-6 {
 			t.Errorf("%s[%d]: got %v@%v, want ~%v@%v", side, i, got[i].Volume, got[i].Price, want[i].Quantity, want[i].Price)
 		}
 	}
@@ -149,12 +151,12 @@ func TestFillAccountingMatchesEngine(t *testing.T) {
 
 	// Stale fill against a since-replaced generation must not corrupt the level:
 	// resize the ask (mints gen #2), then inject a fill for the OLD id.
-	oldID, _ := s.OrderID(orderbook.SideSell, 101)
+	oldID, _ := s.OrderID(orderbook.SideSell, decimal.FromInt(101))
 	ref.Apply(bookSnap(2, t0.Add(time.Second), false, nil, []feed.LOBLevel{lvl(101, 6)}))
 	if _, err := s.Converge(context.Background(), 1.0); err != nil { // re-place ask@101 as gen #2
 		t.Fatal(err)
 	}
-	s.OnTrade(&orderbook.Trade{Instrument: "BTC-USD", SellOrderID: oldID, Volume: 99}) // stale gen
+	s.OnTrade(&orderbook.Trade{Instrument: "BTC-USD", SellOrderID: oldID, Volume: decimal.FromInt(99)}) // stale gen
 	if _, err := s.Converge(context.Background(), 1.0); err != nil {
 		t.Fatal(err)
 	}
@@ -163,8 +165,8 @@ func TestFillAccountingMatchesEngine(t *testing.T) {
 	}
 
 	// Real fill against the current generation eats 2; converge tops it back up.
-	curID, _ := s.OrderID(orderbook.SideSell, 101)
-	if _, _, err := eng.PlaceMarket(context.Background(), &orderbook.Order{ID: "u1", Instrument: "BTC-USD", Side: orderbook.SideBuy, Volume: 2}); err != nil {
+	curID, _ := s.OrderID(orderbook.SideSell, decimal.FromInt(101))
+	if _, _, err := eng.PlaceMarket(context.Background(), &orderbook.Order{ID: "u1", Instrument: "BTC-USD", Side: orderbook.SideBuy, Volume: decimal.FromInt(2)}); err != nil {
 		t.Fatal(err)
 	}
 	_ = curID
@@ -203,14 +205,14 @@ func TestStaleLevelRemovedPromptly(t *testing.T) {
 	}
 	snap, _ := eng.Snapshot("BTC-USD")
 	for _, l := range snap.Bids {
-		if l.Price == 100 {
+		if l.Price.Eq(decimal.FromInt(100)) {
 			t.Errorf("stale level 100 still present: %+v", l)
 		}
 	}
 	// The still-present 99 bid remains.
 	found99 := false
 	for _, l := range snap.Bids {
-		if l.Price == 99 {
+		if l.Price.Eq(decimal.FromInt(99)) {
 			found99 = true
 		}
 	}

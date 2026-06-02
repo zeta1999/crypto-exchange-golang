@@ -7,16 +7,34 @@
 // snapshots; Coinbase level2 emits one snapshot followed by diffs. The Book
 // is the anchor the emulator's seeder (Phase 3) and RTR controller (Phase 4)
 // converge the engine book toward.
+//
+// Prices and quantities are exact decimal.Decimal values: the feed package
+// stays float64 + decimal strings, and this package is the conversion
+// boundary. When a frame carries the venue's exact decimal string
+// (PriceDecimal/QuantityDecimal) we parse that; otherwise we fall back to the
+// lossy float64. Levels are keyed by their exact Decimal price, so a level
+// quoted as "100.50" and a later removal quoted as "100.5" collapse to one
+// logical price.
 package reference
 
 import (
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
+
+// Level is one price level in the reference book, carrying exact decimal
+// price and quantity. It is a pure value type (no slices, maps, or pointers):
+// the book hands out levels by shallow copy and relies on that being a deep
+// copy for its immutability guarantee.
+type Level struct {
+	Price      decimal.Decimal
+	Quantity   decimal.Decimal
+	OrderCount uint32
+}
 
 // Book is a single instrument's reference limit order book. It is safe for
 // concurrent use, but reads are serialized: every read takes an internal
@@ -28,8 +46,8 @@ type Book struct {
 	exchange   string
 
 	mu   sync.Mutex
-	bids map[string]feed.LOBLevel // key: canonical price string; price -> level
-	asks map[string]feed.LOBLevel
+	bids map[decimal.Decimal]Level // key: exact price; price -> level
+	asks map[decimal.Decimal]Level
 
 	initialized bool   // a snapshot has been seen; diffs are applicable
 	lastSeq     uint64 // metadata only: see note in Apply
@@ -41,8 +59,8 @@ type Book struct {
 	// of diffs between two reads costs a single sort.
 	dirty      bool
 	crossed    bool
-	sortedBids []feed.LOBLevel // descending price
-	sortedAsks []feed.LOBLevel // ascending price
+	sortedBids []Level // descending price
+	sortedAsks []Level // ascending price
 }
 
 // NewBook returns an empty book for instrument on exchange.
@@ -50,22 +68,39 @@ func NewBook(instrument, exchange string) *Book {
 	return &Book{
 		instrument: instrument,
 		exchange:   exchange,
-		bids:       make(map[string]feed.LOBLevel),
-		asks:       make(map[string]feed.LOBLevel),
+		bids:       make(map[decimal.Decimal]Level),
+		asks:       make(map[decimal.Decimal]Level),
 	}
 }
 
 func (b *Book) Instrument() string { return b.instrument }
 func (b *Book) Exchange() string   { return b.exchange }
 
-// levelKey identifies a price level by its canonical float rendering. Keying
-// on the float (rather than preferring the decimal string) guarantees one
-// key per logical price even if some frames carry a decimal string and
-// others don't — mixing the two schemes would let "100.50" and "100.5" map
-// to separate, independently-removable entries (a phantom-level bug). The
-// exact decimal is still preserved on the stored LOBLevel.
-func levelKey(l feed.LOBLevel) string {
-	return strconv.FormatFloat(l.Price, 'f', -1, 64)
+// toLevel converts an incoming feed.LOBLevel to an exact reference.Level.
+// Prefer the venue's exact decimal strings (PriceDecimal/QuantityDecimal) when
+// present; otherwise fall back to the lossy float64. The Decimal price keys the
+// internal maps, so "100.50" and "100.5" collapse to one logical level.
+func toLevel(l feed.LOBLevel) Level {
+	var price, qty decimal.Decimal
+	if l.PriceDecimal != "" {
+		if d, err := decimal.Parse(l.PriceDecimal); err == nil {
+			price = d
+		} else {
+			price = decimal.FromFloat(l.Price)
+		}
+	} else {
+		price = decimal.FromFloat(l.Price)
+	}
+	if l.QuantityDecimal != "" {
+		if d, err := decimal.Parse(l.QuantityDecimal); err == nil {
+			qty = d
+		} else {
+			qty = decimal.FromFloat(l.Quantity)
+		}
+	} else {
+		qty = decimal.FromFloat(l.Quantity)
+	}
+	return Level{Price: price, Quantity: qty, OrderCount: l.OrderCount}
 }
 
 // Apply folds one snapshot or diff into the book. It reports whether the
@@ -79,16 +114,18 @@ func (b *Book) Apply(s *feed.LOBSnapshot) bool {
 	defer b.mu.Unlock()
 
 	if s.Snapshot {
-		b.bids = make(map[string]feed.LOBLevel, len(s.Bids))
-		b.asks = make(map[string]feed.LOBLevel, len(s.Asks))
+		b.bids = make(map[decimal.Decimal]Level, len(s.Bids))
+		b.asks = make(map[decimal.Decimal]Level, len(s.Asks))
 		for _, l := range s.Bids {
-			if l.Quantity > 0 {
-				b.bids[levelKey(l)] = l
+			lvl := toLevel(l)
+			if lvl.Quantity.Sign() > 0 {
+				b.bids[lvl.Price] = lvl
 			}
 		}
 		for _, l := range s.Asks {
-			if l.Quantity > 0 {
-				b.asks[levelKey(l)] = l
+			lvl := toLevel(l)
+			if lvl.Quantity.Sign() > 0 {
+				b.asks[lvl.Price] = lvl
 			}
 		}
 		b.initialized = true
@@ -122,13 +159,13 @@ func (b *Book) Apply(s *feed.LOBSnapshot) bool {
 }
 
 // applySide upserts non-zero levels and removes zero-quantity ones.
-func applySide(side map[string]feed.LOBLevel, levels []feed.LOBLevel) {
+func applySide(side map[decimal.Decimal]Level, levels []feed.LOBLevel) {
 	for _, l := range levels {
-		k := levelKey(l)
-		if l.Quantity == 0 {
-			delete(side, k)
+		lvl := toLevel(l)
+		if lvl.Quantity.Sign() == 0 {
+			delete(side, lvl.Price)
 		} else {
-			side[k] = l
+			side[lvl.Price] = lvl
 		}
 	}
 }
@@ -152,23 +189,23 @@ func (b *Book) rebuild() {
 	b.sortedBids = sortedLevels(b.bids, true)
 	b.sortedAsks = sortedLevels(b.asks, false)
 	b.crossed = len(b.sortedBids) > 0 && len(b.sortedAsks) > 0 &&
-		b.sortedBids[0].Price >= b.sortedAsks[0].Price
+		b.sortedBids[0].Price.Gte(b.sortedAsks[0].Price)
 	if b.crossed {
 		b.crossings++
 	}
 	b.dirty = false
 }
 
-func sortedLevels(m map[string]feed.LOBLevel, desc bool) []feed.LOBLevel {
-	out := make([]feed.LOBLevel, 0, len(m))
+func sortedLevels(m map[decimal.Decimal]Level, desc bool) []Level {
+	out := make([]Level, 0, len(m))
 	for _, l := range m {
 		out = append(out, l)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if desc {
-			return out[i].Price > out[j].Price
+			return out[i].Price.Cmp(out[j].Price) > 0
 		}
-		return out[i].Price < out[j].Price
+		return out[i].Price.Cmp(out[j].Price) < 0
 	})
 	return out
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/grpc/exchangev1"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -275,8 +276,8 @@ func toProtoTrade(t *orderbook.Trade) *exchangev1.Trade {
 		BuyOrderId:     t.BuyOrderID,
 		SellOrderId:    t.SellOrderID,
 		Instrument:     t.Instrument,
-		Price:          t.Price,
-		Volume:         t.Volume,
+		Price:          t.Price.Float64(),
+		Volume:         t.Volume.Float64(),
 		ExecutedAtUnix: t.ExecutedAt.Unix(),
 	}
 }
@@ -287,14 +288,14 @@ func toProtoSnapshot(snap *orderbook.Snapshot) *exchangev1.Snapshot {
 	}
 	proto := &exchangev1.Snapshot{
 		Instrument: snap.Instrument,
-		BestBid:    snap.BestBid,
-		BestAsk:    snap.BestAsk,
+		BestBid:    snap.BestBid.Float64(),
+		BestAsk:    snap.BestAsk.Float64(),
 	}
 	for _, lvl := range snap.Bids {
-		proto.Bids = append(proto.Bids, &exchangev1.Level{Price: lvl.Price, Volume: lvl.Volume})
+		proto.Bids = append(proto.Bids, &exchangev1.Level{Price: lvl.Price.Float64(), Volume: lvl.Volume.Float64()})
 	}
 	for _, lvl := range snap.Asks {
-		proto.Asks = append(proto.Asks, &exchangev1.Level{Price: lvl.Price, Volume: lvl.Volume})
+		proto.Asks = append(proto.Asks, &exchangev1.Level{Price: lvl.Price.Float64(), Volume: lvl.Volume.Float64()})
 	}
 	if snap.LastTrade != nil {
 		proto.LastTrade = toProtoTrade(snap.LastTrade)
@@ -333,8 +334,8 @@ func orderFromProto(cmd *exchangev1.OrderCommand) *orderbook.Order {
 	return &orderbook.Order{
 		ID:         cmd.GetClientId(),
 		Instrument: cmd.GetInstrument(),
-		Price:      cmd.GetPrice(),
-		Volume:     cmd.GetVolume(),
+		Price:      decimal.FromFloat(cmd.GetPrice()),
+		Volume:     decimal.FromFloat(cmd.GetVolume()),
 		Side:       orderbook.Side(cmd.GetSide()),
 		IsMarket:   cmd.GetMarket(),
 	}

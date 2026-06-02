@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // Check defines the signature for user supplied margin call logic.
@@ -41,18 +42,21 @@ func (v *Validator) Validate(ctx context.Context, ord *orderbook.Order) error {
 }
 
 // WithNotionalLimit is an example check to keep notional below a threshold.
+// The limit is accepted as a float64 for caller convenience and converted once
+// to an exact decimal.Decimal; the comparison itself is exact.
 func WithNotionalLimit(limit float64) Check {
+	limitDec := decimal.FromFloat(limit)
 	return func(ctx context.Context, ord *orderbook.Order, snap *orderbook.Snapshot) error {
 		reference := snap.BestAsk
 		if ord.Side == orderbook.SideSell {
 			reference = snap.BestBid
 		}
-		if reference == 0 {
+		if reference.IsZero() {
 			reference = ord.Price
 		}
-		notional := ord.Volume * reference
-		if notional > limit {
-			return fmt.Errorf("notional %.2f exceeds limit %.2f", notional, limit)
+		notional := ord.Volume.Mul(reference)
+		if notional.Gt(limitDec) {
+			return fmt.Errorf("notional %s exceeds limit %s", notional.StringPrec(2), limitDec.StringPrec(2))
 		}
 		return nil
 	}

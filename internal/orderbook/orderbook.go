@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // Side enumerates supported order directions.
@@ -19,8 +21,8 @@ const (
 type Order struct {
 	ID         string
 	Instrument string
-	Price      float64
-	Volume     float64
+	Price      decimal.Decimal
+	Volume     decimal.Decimal
 	Side       Side
 	IsMarket   bool
 	Metadata   map[string]string
@@ -31,8 +33,8 @@ type Trade struct {
 	BuyOrderID  string
 	SellOrderID string
 	Instrument  string
-	Price       float64
-	Volume      float64
+	Price       decimal.Decimal
+	Volume      decimal.Decimal
 	ExecutedAt  time.Time
 }
 
@@ -42,14 +44,14 @@ type Snapshot struct {
 	Bids       []Level
 	Asks       []Level
 	LastTrade  *Trade
-	BestBid    float64
-	BestAsk    float64
+	BestBid    decimal.Decimal
+	BestAsk    decimal.Decimal
 }
 
 // Level represents liquidity available at a specific price.
 type Level struct {
-	Price  float64
-	Volume float64
+	Price  decimal.Decimal
+	Volume decimal.Decimal
 }
 
 var (
@@ -112,14 +114,14 @@ func (b *OrderBook) AddLimitOrder(ord *Order) ([]*Trade, error) {
 	book.mu.Lock()
 	defer book.mu.Unlock()
 
-	if ord.Volume == 0 {
+	if ord.Volume.IsZero() {
 		// Zero-volume orders act as triggers.
 		b.fire("trigger", ord)
 		return nil, nil
 	}
 
 	trades := book.matchLocked(ord)
-	if ord.Volume > 0 && !ord.IsMarket {
+	if ord.Volume.Sign() > 0 && !ord.IsMarket {
 		book.enqueueLocked(ord)
 	}
 	for _, t := range trades {
@@ -183,12 +185,12 @@ func (b *instrumentBook) enqueueLocked(ord *Order) {
 	if ord.Side == SideBuy {
 		b.bids.orders = append(b.bids.orders, ord)
 		sort.SliceStable(b.bids.orders, func(i, j int) bool {
-			return b.bids.orders[i].Price > b.bids.orders[j].Price
+			return b.bids.orders[i].Price.Cmp(b.bids.orders[j].Price) > 0
 		})
 	} else {
 		b.asks.orders = append(b.asks.orders, ord)
 		sort.SliceStable(b.asks.orders, func(i, j int) bool {
-			return b.asks.orders[i].Price < b.asks.orders[j].Price
+			return b.asks.orders[i].Price.Cmp(b.asks.orders[j].Price) < 0
 		})
 	}
 }
@@ -203,19 +205,19 @@ func (b *instrumentBook) matchLocked(incoming *Order) []*Trade {
 	}
 
 	i := 0
-	for incoming.Volume > 0 && i < len(*queue) {
+	for incoming.Volume.Sign() > 0 && i < len(*queue) {
 		resting := (*queue)[i]
 		if !incoming.IsMarket {
-			if incoming.Side == SideBuy && incoming.Price < resting.Price {
+			if incoming.Side == SideBuy && incoming.Price.Cmp(resting.Price) < 0 {
 				break
 			}
-			if incoming.Side == SideSell && incoming.Price > resting.Price {
+			if incoming.Side == SideSell && incoming.Price.Cmp(resting.Price) > 0 {
 				break
 			}
 		}
-		traded := min(incoming.Volume, resting.Volume)
-		incoming.Volume -= traded
-		resting.Volume -= traded
+		traded := decimal.Min(incoming.Volume, resting.Volume)
+		incoming.Volume = incoming.Volume.Sub(traded)
+		resting.Volume = resting.Volume.Sub(traded)
 		trade := &Trade{
 			Instrument: incoming.Instrument,
 			Price:      resting.Price,
@@ -231,7 +233,7 @@ func (b *instrumentBook) matchLocked(incoming *Order) []*Trade {
 		}
 		trades = append(trades, trade)
 		b.lastTrade = trade
-		if resting.Volume == 0 {
+		if resting.Volume.IsZero() {
 			i++
 		} else {
 			(*queue)[i] = resting
@@ -256,30 +258,23 @@ func removeOrder(orders *[]*Order, orderID string) (*Order, bool) {
 }
 
 func aggregateLevels(orders []*Order, desc bool) []Level {
-	levels := make(map[float64]float64)
+	levels := make(map[decimal.Decimal]decimal.Decimal)
 	for _, o := range orders {
-		levels[o.Price] += o.Volume
+		levels[o.Price] = levels[o.Price].Add(o.Volume)
 	}
-	var prices []float64
+	prices := make([]decimal.Decimal, 0, len(levels))
 	for price := range levels {
 		prices = append(prices, price)
 	}
 	sort.Slice(prices, func(i, j int) bool {
 		if desc {
-			return prices[i] > prices[j]
+			return prices[i].Cmp(prices[j]) > 0
 		}
-		return prices[i] < prices[j]
+		return prices[i].Cmp(prices[j]) < 0
 	})
 	result := make([]Level, 0, len(prices))
 	for _, price := range prices {
 		result = append(result, Level{Price: price, Volume: levels[price]})
 	}
 	return result
-}
-
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
 }

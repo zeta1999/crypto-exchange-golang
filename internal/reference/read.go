@@ -3,8 +3,20 @@ package reference
 import (
 	"time"
 
-	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
+
+// Snapshot is an immutable copy of a reference book's visible state, with
+// exact decimal levels. It mirrors the shape of feed.LOBSnapshot but uses
+// reference.Level (Decimal) so downstream consumers price off exact values.
+type Snapshot struct {
+	Instrument     string
+	Exchange       string
+	Timestamp      time.Time
+	SequenceNumber uint64
+	Bids           []Level // descending price
+	Asks           []Level // ascending price
+}
 
 // Initialized reports whether at least one snapshot has been applied.
 func (b *Book) Initialized() bool {
@@ -65,89 +77,89 @@ func (b *Book) Stale(now time.Time, maxAge time.Duration) bool {
 }
 
 // BestBid returns the highest bid level, or ok=false if the bid side is empty.
-func (b *Book) BestBid() (feed.LOBLevel, bool) {
+func (b *Book) BestBid() (Level, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.rebuild()
 	if len(b.sortedBids) == 0 {
-		return feed.LOBLevel{}, false
+		return Level{}, false
 	}
 	return b.sortedBids[0], true
 }
 
 // BestAsk returns the lowest ask level, or ok=false if the ask side is empty.
-func (b *Book) BestAsk() (feed.LOBLevel, bool) {
+func (b *Book) BestAsk() (Level, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.rebuild()
 	if len(b.sortedAsks) == 0 {
-		return feed.LOBLevel{}, false
+		return Level{}, false
 	}
 	return b.sortedAsks[0], true
 }
 
 // BestBidAsk returns both tops; ok is false unless both sides are non-empty.
-func (b *Book) BestBidAsk() (bid, ask feed.LOBLevel, ok bool) {
+func (b *Book) BestBidAsk() (bid, ask Level, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.rebuild()
 	if len(b.sortedBids) == 0 || len(b.sortedAsks) == 0 {
-		return feed.LOBLevel{}, feed.LOBLevel{}, false
+		return Level{}, Level{}, false
 	}
 	return b.sortedBids[0], b.sortedAsks[0], true
 }
 
-// Mid returns the midpoint of the touch, or ok=false if either side is empty.
-func (b *Book) Mid() (float64, bool) {
+// Mid returns the exact midpoint of the touch, or ok=false if either side is
+// empty.
+func (b *Book) Mid() (decimal.Decimal, bool) {
 	bid, ask, ok := b.BestBidAsk()
 	if !ok {
-		return 0, false
+		return decimal.Zero, false
 	}
-	return (bid.Price + ask.Price) / 2, true
+	return bid.Price.Add(ask.Price).Div(decimal.FromInt(2)), true
 }
 
 // Spread returns best ask minus best bid, or ok=false if either side is
 // empty. It can be negative if the book is crossed (see Crossed).
-func (b *Book) Spread() (float64, bool) {
+func (b *Book) Spread() (decimal.Decimal, bool) {
 	bid, ask, ok := b.BestBidAsk()
 	if !ok {
-		return 0, false
+		return decimal.Zero, false
 	}
-	return ask.Price - bid.Price, true
+	return ask.Price.Sub(bid.Price), true
 }
 
 // Depth returns copies of the top n levels per side (n <= 0 means all),
 // sorted bids descending and asks ascending. The returned slices are owned
 // by the caller and safe to mutate.
-func (b *Book) Depth(n int) (bids, asks []feed.LOBLevel) {
+func (b *Book) Depth(n int) (bids, asks []Level) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.rebuild()
 	return clip(b.sortedBids, n), clip(b.sortedAsks, n)
 }
 
-func clip(s []feed.LOBLevel, n int) []feed.LOBLevel {
+func clip(s []Level, n int) []Level {
 	if n <= 0 || n > len(s) {
 		n = len(s)
 	}
-	out := make([]feed.LOBLevel, n)
+	out := make([]Level, n)
 	copy(out, s[:n])
 	return out
 }
 
-// Snapshot returns an immutable copy of the current book as a feed.LOBSnapshot
-// (Snapshot=true), carrying the last sequence number and update time. Safe to
-// hand to downstream consumers without exposing internal state.
-func (b *Book) Snapshot() *feed.LOBSnapshot {
+// Snapshot returns an immutable copy of the current book as a reference
+// Snapshot, carrying the last sequence number and update time. Safe to hand
+// to downstream consumers without exposing internal state.
+func (b *Book) Snapshot() *Snapshot {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.rebuild()
-	return &feed.LOBSnapshot{
+	return &Snapshot{
 		Instrument:     b.instrument,
 		Exchange:       b.exchange,
 		Timestamp:      b.lastUpdate,
 		SequenceNumber: b.lastSeq,
-		Snapshot:       true,
 		Bids:           clip(b.sortedBids, 0),
 		Asks:           clip(b.sortedAsks, 0),
 	}

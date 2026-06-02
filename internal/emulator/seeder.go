@@ -26,11 +26,8 @@ import (
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/reference"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
-
-// volEps is the volume below which a level is treated as empty, and the
-// threshold for "unchanged" volume — avoids float-equality churn.
-const volEps = 1e-9
 
 // MetadataKey/MetadataValue tag engine orders the seeder owns, so other
 // layers (RTR, toxicity, API) can distinguish synthetic liquidity from real
@@ -75,14 +72,14 @@ type Seeder struct {
 	nonce  uint64                // generation counter for unique order IDs
 
 	fillMu sync.Mutex
-	fills  map[string]float64 // full order ID -> volume filled since last Converge
+	fills  map[string]decimal.Decimal // full order ID -> volume filled since last Converge
 }
 
 type synthOrder struct {
 	id     string
 	side   orderbook.Side
-	price  float64
-	volume float64
+	price  decimal.Decimal
+	volume decimal.Decimal
 }
 
 // Stats summarizes one reconcile pass.
@@ -101,14 +98,15 @@ func NewSeeder(matcher Matcher, ref *reference.Book, cfg Config) *Seeder {
 		ref:     ref,
 		cfg:     cfg,
 		placed:  make(map[string]synthOrder),
-		fills:   make(map[string]float64),
+		fills:   make(map[string]decimal.Decimal),
 	}
 }
 
-// priceKey is the canonical per-level identity, matching the reference book's
-// float keying so a level maps to a stable engine order ID across passes.
-func priceKey(side orderbook.Side, price float64) string {
-	return string(side) + ":" + strconv.FormatFloat(price, 'f', -1, 64)
+// priceKey is the canonical per-level identity. It uses the exact 18-digit
+// decimal rendering so a level maps to a stable engine order ID across passes,
+// and so two equal prices always collapse to one key.
+func priceKey(side orderbook.Side, price decimal.Decimal) string {
+	return string(side) + ":" + price.StringPrec(18)
 }
 
 func (s *Seeder) idPrefix() string { return "synth:" + s.cfg.Instrument + ":" }
@@ -117,14 +115,14 @@ func (s *Seeder) idPrefix() string { return "synth:" + s.cfg.Instrument + ":" }
 // generation counter is what lets fill accounting distinguish a placement from
 // the order it replaced: a fill buffered against an old generation is ignored
 // once the level is re-placed. Caller holds s.mu.
-func (s *Seeder) nextIDLocked(side orderbook.Side, price float64) string {
+func (s *Seeder) nextIDLocked(side orderbook.Side, price decimal.Decimal) string {
 	s.nonce++
 	return s.idPrefix() + priceKey(side, price) + "#" + strconv.FormatUint(s.nonce, 10)
 }
 
 // OrderID returns the current engine order ID for a level, if one is resting.
 // Useful for ops/inspection and tests that need to address a synthetic order.
-func (s *Seeder) OrderID(side orderbook.Side, price float64) (string, bool) {
+func (s *Seeder) OrderID(side orderbook.Side, price decimal.Decimal) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o, ok := s.placed[priceKey(side, price)]
@@ -149,7 +147,7 @@ func (s *Seeder) OnTrade(t *orderbook.Trade) {
 			continue
 		}
 		s.fillMu.Lock()
-		s.fills[id] += t.Volume
+		s.fills[id] = s.fills[id].Add(t.Volume)
 		s.fillMu.Unlock()
 	}
 }
@@ -189,9 +187,9 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 	s.foldFillsLocked()
 
 	bids, asks := s.ref.Depth(s.cfg.DepthLevels)
-	refVol := make(map[string]float64, len(bids)+len(asks))
+	refVol := make(map[string]decimal.Decimal, len(bids)+len(asks))
 	side := make(map[string]orderbook.Side, len(bids)+len(asks))
-	price := make(map[string]float64, len(bids)+len(asks))
+	price := make(map[string]decimal.Decimal, len(bids)+len(asks))
 	for _, l := range bids {
 		k := priceKey(orderbook.SideBuy, l.Price)
 		refVol[k], side[k], price[k] = l.Quantity, orderbook.SideBuy, l.Price
@@ -206,20 +204,24 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 	type plan struct {
 		key     string
 		side    orderbook.Side
-		price   float64
-		target  float64
+		price   decimal.Decimal
+		target  decimal.Decimal
 		existed bool
 		curID   string // engine ID of the order to cancel, if existed
 	}
 	plans := make(map[string]plan, len(refVol)+len(s.placed))
 	for k := range refVol {
 		cur, existed := s.placed[k]
-		c := 0.0
+		c := decimal.Zero
 		curID := ""
 		if existed {
 			c, curID = cur.volume, cur.id
 		}
-		plans[k] = plan{key: k, side: side[k], price: price[k], target: c + alpha*(refVol[k]-c), existed: existed, curID: curID}
+		// target = c + alpha*(ref - c). alpha is the float convergence
+		// fraction from the RTR controller; the step itself is lossy edge
+		// scaling (MulFloat), which is exactly the intended use.
+		target := c.Add(refVol[k].Sub(c).MulFloat(alpha))
+		plans[k] = plan{key: k, side: side[k], price: price[k], target: target, existed: existed, curID: curID}
 	}
 	for k, cur := range s.placed {
 		if _, ok := refVol[k]; ok {
@@ -230,7 +232,7 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 		// which would leave a growing tail of dust orders as the book moves
 		// ("drain stale synthetics first", PLAN §4). Only the volumes of
 		// levels still in the reference converge gradually.
-		plans[k] = plan{key: k, side: cur.side, price: cur.price, target: 0, existed: true, curID: cur.id}
+		plans[k] = plan{key: k, side: cur.side, price: cur.price, target: decimal.Zero, existed: true, curID: cur.id}
 	}
 
 	// Pass 1: cancel everything that must change (removed, drained, or
@@ -238,7 +240,7 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 	apply := make([]plan, 0, len(plans))
 	for k, p := range plans {
 		cur := s.placed[k]
-		if p.existed && math.Abs(p.target-cur.volume) <= volEps {
+		if p.existed && p.target.Eq(cur.volume) {
 			continue // already at target; leave the resting order in place
 		}
 		if p.existed {
@@ -247,7 +249,7 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 			}
 			delete(s.placed, k) // its generation is retired; buffered fills for curID now go stale
 		}
-		if p.target <= volEps {
+		if p.target.Sign() <= 0 {
 			if p.existed {
 				st.Cancelled++
 			}
@@ -293,7 +295,7 @@ func (s *Seeder) Converge(ctx context.Context, alpha float64) (Stats, error) {
 func (s *Seeder) foldFillsLocked() {
 	s.fillMu.Lock()
 	fills := s.fills
-	s.fills = make(map[string]float64)
+	s.fills = make(map[string]decimal.Decimal)
 	s.fillMu.Unlock()
 	if len(fills) == 0 {
 		return
@@ -308,8 +310,8 @@ func (s *Seeder) foldFillsLocked() {
 			continue // stale generation (order was replaced/removed) — discard
 		}
 		cur := s.placed[k]
-		cur.volume -= v
-		if cur.volume <= volEps {
+		cur.volume = cur.volume.Sub(v)
+		if cur.volume.Sign() <= 0 {
 			delete(s.placed, k)
 		} else {
 			s.placed[k] = cur

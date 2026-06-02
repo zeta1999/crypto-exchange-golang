@@ -27,7 +27,7 @@ func TestSetRoutesByInstrument(t *testing.T) {
 	if !ok {
 		t.Fatal("ETH-USD book missing")
 	}
-	if bid, _ := eth.BestBid(); bid.Price != 50 {
+	if bid, _ := eth.BestBid(); !bid.Price.Eq(dec("50")) {
 		t.Errorf("ETH best bid = %v", bid.Price)
 	}
 }
@@ -57,13 +57,13 @@ func TestConsumeReplaySample(t *testing.T) {
 		t.Fatal("book has no touch")
 	}
 	// Snapshot bids were 41999 and 41998.5; the diff removed 41999.
-	if bid.Price != 41998.5 {
+	if !bid.Price.Eq(dec("41998.5")) {
 		t.Errorf("best bid = %v, want 41998.5 (41999 removed by diff)", bid.Price)
 	}
-	if ask.Price != 42001 {
+	if !ask.Price.Eq(dec("42001")) {
 		t.Errorf("best ask = %v, want 42001", ask.Price)
 	}
-	if mid, _ := b.Mid(); mid != 41999.75 {
+	if mid, _ := b.Mid(); !mid.Eq(dec("41999.75")) {
 		t.Errorf("mid = %v, want 41999.75", mid)
 	}
 	bids, asks := b.Depth(0)

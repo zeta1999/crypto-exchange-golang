@@ -5,7 +5,10 @@ import (
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
+
+func dec(s string) decimal.Decimal { return decimal.MustParse(s) }
 
 func lvl(price, qty float64) feed.LOBLevel {
 	return feed.LOBLevel{Price: price, Quantity: qty}
@@ -28,36 +31,36 @@ func TestSnapshotThenDiffStepState(t *testing.T) {
 		t.Fatal("snapshot not applied")
 	}
 	bid, ask, ok := b.BestBidAsk()
-	if !ok || bid.Price != 100 || ask.Price != 101 {
+	if !ok || !bid.Price.Eq(dec("100")) || !ask.Price.Eq(dec("101")) {
 		t.Fatalf("after snap: bid=%v ask=%v ok=%v", bid.Price, ask.Price, ok)
 	}
-	if mid, _ := b.Mid(); mid != 100.5 {
+	if mid, _ := b.Mid(); !mid.Eq(dec("100.5")) {
 		t.Errorf("mid = %v, want 100.5", mid)
 	}
-	if sp, _ := b.Spread(); sp != 1 {
+	if sp, _ := b.Spread(); !sp.Eq(dec("1")) {
 		t.Errorf("spread = %v, want 1", sp)
 	}
 
 	// Step 2: diff improves the bid and adds an ask level.
 	b.Apply(diff(2, t0.Add(time.Second), []feed.LOBLevel{lvl(100.5, 4)}, []feed.LOBLevel{lvl(100.75, 2)}))
 	bid, ask, _ = b.BestBidAsk()
-	if bid.Price != 100.5 || ask.Price != 100.75 {
+	if !bid.Price.Eq(dec("100.5")) || !ask.Price.Eq(dec("100.75")) {
 		t.Errorf("after diff1: bid=%v ask=%v", bid.Price, ask.Price)
 	}
 
 	// Step 3: diff removes the top bid (qty 0) -> best bid falls back to 100.
 	b.Apply(diff(3, t0.Add(2*time.Second), []feed.LOBLevel{lvl(100.5, 0)}, nil))
 	bid, _, _ = b.BestBidAsk()
-	if bid.Price != 100 {
+	if !bid.Price.Eq(dec("100")) {
 		t.Errorf("after removal: best bid = %v, want 100", bid.Price)
 	}
 
 	// Depth reflects remaining levels, sorted.
 	bids, asks := b.Depth(10)
-	if len(bids) != 2 || bids[0].Price != 100 || bids[1].Price != 99 {
+	if len(bids) != 2 || !bids[0].Price.Eq(dec("100")) || !bids[1].Price.Eq(dec("99")) {
 		t.Errorf("bids = %+v", bids)
 	}
-	if len(asks) != 3 || asks[0].Price != 100.75 {
+	if len(asks) != 3 || !asks[0].Price.Eq(dec("100.75")) {
 		t.Errorf("asks = %+v", asks)
 	}
 	if got := b.LastUpdate(); !got.Equal(t0.Add(2 * time.Second)) {
@@ -90,7 +93,7 @@ func TestSequenceIsMetadataNotEnforced(t *testing.T) {
 		t.Error("diff must apply regardless of connection-global seq ordering")
 	}
 	bid, _ := b.BestBid()
-	if bid.Quantity != 7 {
+	if !bid.Quantity.Eq(dec("7")) {
 		t.Errorf("diff not applied: qty=%v, want 7", bid.Quantity)
 	}
 	if b.Anomalies() != 0 {
@@ -116,7 +119,7 @@ func TestCrossedBookDetected(t *testing.T) {
 	if b.Crossings() == 0 {
 		t.Error("crossing should be counted")
 	}
-	if sp, _ := b.Spread(); sp >= 0 {
+	if sp, _ := b.Spread(); sp.Sign() >= 0 {
 		t.Errorf("crossed spread should be negative, got %v", sp)
 	}
 }
@@ -144,7 +147,7 @@ func TestBinanceStyleSnapshotsNoSequence(t *testing.T) {
 	b.Apply(&feed.LOBSnapshot{Instrument: "BTCUSDT", Exchange: "binance", Timestamp: t0, Snapshot: true, Bids: []feed.LOBLevel{lvl(100, 1)}, Asks: []feed.LOBLevel{lvl(101, 1)}})
 	b.Apply(&feed.LOBSnapshot{Instrument: "BTCUSDT", Exchange: "binance", Timestamp: t0.Add(time.Second), Snapshot: true, Bids: []feed.LOBLevel{lvl(105, 2)}, Asks: []feed.LOBLevel{lvl(106, 2)}})
 	bid, ask, ok := b.BestBidAsk()
-	if !ok || bid.Price != 105 || ask.Price != 106 {
+	if !ok || !bid.Price.Eq(dec("105")) || !ask.Price.Eq(dec("106")) {
 		t.Errorf("second snapshot did not replace book: bid=%v ask=%v", bid.Price, ask.Price)
 	}
 	if b.Anomalies() != 0 {
@@ -158,10 +161,10 @@ func TestSnapshotIsImmutable(t *testing.T) {
 	b.Apply(snap(1, t0, []feed.LOBLevel{lvl(100, 2)}, []feed.LOBLevel{lvl(101, 1)}))
 
 	s := b.Snapshot()
-	s.Bids[0].Quantity = 999 // mutate the returned copy
+	s.Bids[0].Quantity = dec("999") // mutate the returned copy
 
 	bid, _ := b.BestBid()
-	if bid.Quantity != 2 {
+	if !bid.Quantity.Eq(dec("2")) {
 		t.Errorf("internal book mutated via returned snapshot: qty=%v", bid.Quantity)
 	}
 }

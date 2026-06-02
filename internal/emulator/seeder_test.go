@@ -9,6 +9,7 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/feed"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/reference"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // okMargin is a pass-through margin validator for tests.
@@ -38,13 +39,13 @@ func assertMirrors(t *testing.T, eng *engine.Engine, ref *reference.Book, depth 
 	cmp(t, "ask", snap.Asks, rasks)
 }
 
-func cmp(t *testing.T, side string, got []orderbook.Level, want []feed.LOBLevel) {
+func cmp(t *testing.T, side string, got []orderbook.Level, want []reference.Level) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("%s levels: got %d, want %d (%+v vs %+v)", side, len(got), len(want), got, want)
 	}
 	for i := range want {
-		if got[i].Price != want[i].Price || got[i].Volume != want[i].Quantity {
+		if !got[i].Price.Eq(want[i].Price) || !got[i].Volume.Eq(want[i].Quantity) {
 			t.Errorf("%s[%d]: got %v@%v, want %v@%v", side, i, got[i].Volume, got[i].Price, want[i].Quantity, want[i].Price)
 		}
 	}
@@ -203,7 +204,7 @@ func TestReconcileToleratesExternallyRemovedOrder(t *testing.T) {
 	}
 
 	// Remove the 99 bid behind the seeder's back.
-	id99, ok := s.OrderID(orderbook.SideBuy, 99)
+	id99, ok := s.OrderID(orderbook.SideBuy, decimal.FromInt(99))
 	if !ok {
 		t.Fatal("expected a synthetic order at 99")
 	}
@@ -220,7 +221,7 @@ func TestReconcileToleratesExternallyRemovedOrder(t *testing.T) {
 	assertMirrors(t, eng, ref, 0)
 
 	// Clear must also tolerate an already-gone order.
-	id100, ok := s.OrderID(orderbook.SideBuy, 100)
+	id100, ok := s.OrderID(orderbook.SideBuy, decimal.FromInt(100))
 	if !ok {
 		t.Fatal("expected a synthetic order at 100")
 	}
