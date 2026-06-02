@@ -212,7 +212,7 @@ func parseTrade(data json.RawMessage) (feed.Event, error) {
 	}
 	price, perr := strconv.ParseFloat(msg.Price, 64)
 	qty, qerr := strconv.ParseFloat(msg.Quantity, 64)
-	if perr != nil || qerr != nil {
+	if perr != nil || qerr != nil || !feed.Finite(price) || !feed.Finite(qty) {
 		return feed.Event{}, fmt.Errorf("binance trade: bad price/qty %q/%q", msg.Price, msg.Quantity)
 	}
 	side := "buy"
@@ -272,7 +272,7 @@ func parseLevels(raw [][]string) []feed.LOBLevel {
 		}
 		price, perr := strconv.ParseFloat(l[0], 64)
 		qty, qerr := strconv.ParseFloat(l[1], 64)
-		if perr != nil || qerr != nil {
+		if perr != nil || qerr != nil || !feed.Finite(price) || !feed.Finite(qty) {
 			continue
 		}
 		levels = append(levels, feed.LOBLevel{

@@ -212,3 +212,14 @@ func TestStreams(t *testing.T) {
 		}
 	}
 }
+
+func TestParseTradeRejectsNonFinite(t *testing.T) {
+	for _, raw := range []string{
+		`{"stream":"btcusdt@trade","data":{"s":"BTCUSDT","t":1,"p":"NaN","q":"1","T":1,"m":false}}`,
+		`{"stream":"btcusdt@trade","data":{"s":"BTCUSDT","t":1,"p":"Inf","q":"1","T":1,"m":false}}`,
+	} {
+		if _, err := ParseMessage([]byte(raw), fixedRecv); err == nil {
+			t.Errorf("non-finite trade %q should be rejected", raw)
+		}
+	}
+}

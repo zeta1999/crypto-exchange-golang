@@ -152,3 +152,17 @@ func TestPriceShiftFallbackEmptyDecimal(t *testing.T) {
 		t.Fatalf("fallback = %q want %q", out.Book.Bids[0].PriceDecimal, want.StringPrec(decimal.ScaleDigits))
 	}
 }
+
+func TestNewPriceShiftRejectsDestructiveFactor(t *testing.T) {
+	// offset_bps = -10000 → factor 0; negative scale → negative factor.
+	// Both must collapse to the identity rather than zero/flip prices.
+	for _, p := range []PriceShift{
+		NewPriceShift(-10000, 1),
+		NewPriceShift(-20000, 1),
+		NewPriceShift(0, -1),
+	} {
+		if !p.IsIdentity() {
+			t.Errorf("destructive config %+v should be identity, factor=%v", p, p.factor())
+		}
+	}
+}

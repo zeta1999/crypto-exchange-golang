@@ -254,7 +254,7 @@ func parseTrades(rawEvents json.RawMessage) ([]feed.Event, error) {
 		for _, t := range ev.Trades {
 			price, perr := strconv.ParseFloat(t.Price, 64)
 			qty, qerr := strconv.ParseFloat(t.Size, 64)
-			if perr != nil || qerr != nil {
+			if perr != nil || qerr != nil || !feed.Finite(price) || !feed.Finite(qty) {
 				continue // drop rather than emit a zero-priced trade
 			}
 			ts, _ := time.Parse(time.RFC3339Nano, t.Time)
@@ -294,7 +294,7 @@ func parseL2(rawEvents json.RawMessage, seq uint64, envTime time.Time) ([]feed.E
 		for _, u := range ev.Updates {
 			price, perr := strconv.ParseFloat(u.PriceLevel, 64)
 			qty, qerr := strconv.ParseFloat(u.NewQuantity, 64)
-			if perr != nil || qerr != nil {
+			if perr != nil || qerr != nil || !feed.Finite(price) || !feed.Finite(qty) {
 				// Dropping a level is safer than emitting price/qty 0:
 				// qty 0 is the "remove this price" signal (see
 				// feed.LOBSnapshot) and would corrupt the book.

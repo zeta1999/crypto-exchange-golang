@@ -82,16 +82,18 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 	}, cfg.Toxicity.Seed)
 	// TODO(phase7): apply OrderAck/FillReport at API edges (Phase 8/9).
 
-	// Each instrument's tape runs on its own goroutine, fed by a buffered
-	// channel, so a burst of trade prints can't head-of-line block reference
-	// book updates (which the dispatcher applies inline) or the seeder/RTR.
-	// Each trade is replayed (fills resting orders in sync) and then fed to the
-	// optional toxicity injector (adverse selection scaled by Kyle λ / VPIN).
+	// Each instrument gets its own buffered channel + worker goroutine handling
+	// BOTH book and trade events, so the shared dispatcher only routes (never
+	// sleeps or does engine work) — one slow instrument or a feed→book latency
+	// can't head-of-line block the others. Per worker: book events rebuild the
+	// reference (after the feed→book latency), trade events are replayed (fill
+	// resting orders in sync) and fed to the optional toxicity injector.
 	tx := cfg.Toxicity
-	tapeCh := make(map[string]chan feed.Event, len(cfg.Instruments))
+	inCh := make(map[string]chan feed.Event, len(cfg.Instruments))
 	for _, sym := range cfg.Instruments {
 		ch := make(chan feed.Event, 1024)
-		tapeCh[sym] = ch
+		inCh[sym] = ch
+		refBook := refs.Ensure(sym, cfg.Venue)
 		tape := emulator.NewTapeReplay(eng, sym)
 		var injector *emulator.ToxicInjector
 		if tx.Scale > 0 {
@@ -100,7 +102,7 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 				WindowTrades: tx.WindowTrades, BucketVolume: tx.BucketVolume,
 				Buckets: tx.Buckets, Seed: tx.Seed,
 			})
-			injector = emulator.NewToxicInjector(eng, refs.Ensure(sym, cfg.Venue), model, sym, tx.Seed)
+			injector = emulator.NewToxicInjector(eng, refBook, model, sym, tx.Seed)
 		}
 		group.Go(func() error {
 			for {
@@ -111,15 +113,21 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 					if !ok {
 						return nil
 					}
-					if ev.Kind != feed.EventTrade || ev.Trade == nil {
-						continue
-					}
-					if _, err := tape.Inject(ctx, ev.Trade); err != nil {
-						log.Printf("tape inject error: %v", err)
-					}
-					if injector != nil {
-						if _, err := injector.Observe(ctx, ev.Trade); err != nil {
-							log.Printf("toxicity inject error: %v", err)
+					switch ev.Kind {
+					case feed.EventBook:
+						lat.Sleep(ctx, lat.FeedToBookDelay()) // per-instrument slow feed
+						refBook.Apply(ev.Book)
+					case feed.EventTrade:
+						if ev.Trade == nil {
+							continue
+						}
+						if _, err := tape.Inject(ctx, ev.Trade); err != nil {
+							log.Printf("tape inject error: %v", err)
+						}
+						if injector != nil {
+							if _, err := injector.Observe(ctx, ev.Trade); err != nil {
+								log.Printf("toxicity inject error: %v", err)
+							}
 						}
 					}
 				}
@@ -127,6 +135,7 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 		})
 	}
 
+	// The dispatcher only price-shifts and routes by instrument — no blocking.
 	group.Go(func() error {
 		for {
 			select {
@@ -136,27 +145,25 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 				if !ok {
 					return nil
 				}
-				// Apply the price shift before routing so the reference book,
-				// seeder, and tape all observe the same dislocated venue.
 				if shiftActive {
-					ev = shift.ApplyEvent(ev)
+					ev = shift.ApplyEvent(ev) // coherent dislocation across book + tape
 				}
+				var sym string
 				switch ev.Kind {
 				case feed.EventBook:
-					// Feed→book latency delays the reference goroutine inline
-					// (intended: a slow feed). No-op for the dev default of 0.
-					lat.Sleep(ctx, lat.FeedToBookDelay())
-					refs.Apply(ev) // fast; rebuilds the reference book inline
-				case feed.EventTrade:
-					if ev.Trade == nil {
-						continue
+					if ev.Book != nil {
+						sym = ev.Book.Instrument
 					}
-					if ch := tapeCh[ev.Trade.Instrument]; ch != nil {
-						select {
-						case ch <- ev: // hand off to the instrument's tape goroutine
-						default:
-							log.Printf("tape channel full for %s; dropping print", ev.Trade.Instrument)
-						}
+				case feed.EventTrade:
+					if ev.Trade != nil {
+						sym = ev.Trade.Instrument
+					}
+				}
+				if ch := inCh[sym]; ch != nil {
+					select {
+					case ch <- ev:
+					default:
+						log.Printf("emulator channel full for %s; dropping event", sym)
 					}
 				}
 			}

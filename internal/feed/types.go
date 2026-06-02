@@ -11,8 +11,15 @@ package feed
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 )
+
+// Finite reports whether f is a usable price/quantity (not NaN or ±Inf).
+// strconv.ParseFloat accepts "NaN"/"Inf" without error, so adapters must
+// reject non-finite values explicitly — they would otherwise panic the exact
+// decimal conversions downstream.
+func Finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
 // EventKind discriminates the payload carried by an Event.
 type EventKind uint8

@@ -25,7 +25,14 @@ func NewPriceShift(offsetBps, scale float64) PriceShift {
 	if scale == 0 {
 		scale = 1
 	}
-	return PriceShift{OffsetBps: offsetBps, Scale: scale}
+	p := PriceShift{OffsetBps: offsetBps, Scale: scale}
+	// A non-positive or non-finite factor (e.g. offset_bps ≤ -10000, or a
+	// negative scale) would zero or sign-flip every price — meaningless and
+	// destructive. Treat such a config as the identity rather than wreck the book.
+	if f := p.factor(); !finite(f) || f <= 0 {
+		return PriceShift{OffsetBps: 0, Scale: 1}
+	}
+	return p
 }
 
 // factor is the multiplicative price factor Scale*(1+OffsetBps/10000), with
