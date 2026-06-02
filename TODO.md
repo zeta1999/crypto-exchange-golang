@@ -56,7 +56,8 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] compare: `Cmp`/`Eq`/`Lt`/`Lte`/`Gt`/`Gte`, free `Min`/`Max`/`Abs`; comparable map-key (proven canonical)
 - [x] tests: Parse↔String round-trip; arithmetic vs math/big.Rat oracle (5k); overflow/edge; JSON robustness
 - [x] brutal review + fixes (JSON quote-strip, FromFloat non-finite, perf TODOs)
-- [ ] (perf, deferred) replace big.Int Mul/Div with allocation-free limb math + benchmark (PLAN §9.7)
+- [x] (perf) Mul → allocation-free 128-bit limb math (PLAN §9.7); oracle-validated, 0 allocs/op + benchmark
+- [ ] (perf, deferred) Div → limb math (256÷128, Knuth D) — rare path, big.Int for now
 - [ ] (optional) float64-backed backend behind same API for A/B + fast mode
 - [x] migration (PLAN.md §9.8): matching core (orderbook/engine/margin) → reference (parses feed decimal strings) → emulator → API edges convert at boundary; feed stays float64. CI green; live-verified (HTTP emits exact decimal strings). Follow-up: exact alpha=1 snap + 1e-9 convergence tolerance.
 
