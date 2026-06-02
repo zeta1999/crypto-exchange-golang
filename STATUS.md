@@ -7,8 +7,10 @@ _Last updated: 2026-06-02_
 exchange (feed → reference → seeded synthetic liquidity + RTR), tradable via gRPC/HTTP/WS, with
 all prices/quantities now exact `decimal.Decimal` (matching core + reference + emulator migrated;
 API edges convert; feed stays float64). Verified live (book 20 levels/side, uncrossed; HTTP emits
-exact decimal strings). Phases 1–4, `pkg/decimal`, and the float64→Decimal migration done &
-reviewed. **Next:** Phase 5 — Trade replay sync; then Phases 6–11.
+exact decimal strings). Phases 1–5, `pkg/decimal`, and the float64→Decimal migration done & reviewed.
+Phase 5 (trade replay) injects the live tape via a single-lock IOC primitive so
+resting user orders fill in sync. **Next:** Phase 6 — configurable toxicity;
+then 7–11.
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -21,7 +23,7 @@ reviewed. **Next:** Phase 5 — Trade replay sync; then Phases 6–11.
 | 2 | Reference book | ☑ | `internal/reference` Book (snapshot+diff, float-keyed levels, crossed-book detection, staleness) + Set (per-instrument routing, Consume). Coinbase connection-global seq-gap detection in adapter. CI green; live BTC-USD book uncrossed; review applied. |
 | 3 | Emulator seeding | ☑ | `internal/emulator.Seeder` mirrors `reference.Book` → tagged synthetic engine orders; reconcile (cancel-before-place, resize, skip crossed), not-found-tolerant, Run/Clear. CI green; live BTC-USD top-20 mirrors exactly, 0 trades; review applied (proved no self-match). |
 | 4 | Return-to-Reference [a] | ☑ | `Seeder.Converge(alpha)` (target=cur+α·(ref−cur)); fill accounting via generation-stamped IDs + trade hook; `RTR` exp-decay controller (α=1−e^(−dt/τ)). CI green; DoD scenario (user trade → gradual reconverge) deterministic; review applied. |
-| 5 | Trade replay sync | ☐ | inject real tape in sync |
+| 5 | Trade replay sync | ☑ | `internal/emulator.TapeReplay` injects tape via single-lock IOC (orderbook.ExecuteLimitIOC); resting user orders fill in sync at own price; wired into binary (per-instrument tape goroutines). CI green; live-verified; review applied (IOC, NaN guard). |
 | 6 | Configurable toxicity [b] | ☐ | Kyle λ + VPIN, weighting knobs |
 | 7 | Scenario & fault injection (test bed) | ☐ | trace replay, artificial latency, price-shift / arb scenarios |
 | 8 | Binance-compatible API | ☐ | REST + WS subset |

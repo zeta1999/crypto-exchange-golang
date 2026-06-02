@@ -61,10 +61,12 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] migration (PLAN.md §9.8): matching core (orderbook/engine/margin) → reference (parses feed decimal strings) → emulator → API edges convert at boundary; feed stays float64. CI green; live-verified (HTTP emits exact decimal strings). Follow-up: exact alpha=1 snap + 1e-9 convergence tolerance.
 
 ## Phase 5 — Trade replay sync
-- [ ] `internal/emulator/replay.go`: tape trade → marketable order vs engine book
-- [ ] fill user limits in sync with tape timing/price
-- [ ] clock model: real-time + accelerated (`speed`)
-- [ ] test: user limit at touched price fills consistent with tape
+- [x] `internal/emulator/replay.go`: tape trade → IOC marketable order vs engine book (single-lock, no resting remainder)
+- [x] fill user limits in sync with tape price (user fills at own price by priority; synthetic absorbs rest → RTR refills)
+- [x] wired into binary: feed subscribes trades; per-instrument tape goroutines; tape orders margin-exempt
+- [x] tests: user limit fills consistent with tape (buy/sell), price-capped, IOC no-remainder, non-finite/unknown-side guards
+- [x] brutal review + fixes (IOC primitive vs place-then-cancel, NaN/Inf panic guard, HOL decouple)
+- [ ] real-time vs accelerated (`speed`) clock — deferred to Phase 7 (trace replay drives the clock)
 
 ## Phase 6 — Configurable toxicity [b]
 - [ ] `internal/toxicity/kyle.go`: signed-volume → Δprice regression (λ)
