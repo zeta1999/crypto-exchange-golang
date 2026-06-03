@@ -207,6 +207,57 @@ func (f *family) gauge(key string) *Gauge {
 	return g
 }
 
+// Histogram is a cumulative latency/observation histogram. It is built from the
+// existing counter primitives — `<name>_bucket{le="…"}` (cumulative),
+// `<name>_sum`, `<name>_count` — so it renders as a scrape-valid Prometheus
+// histogram with no changes to the exposition core. Safe for concurrent use.
+type Histogram struct {
+	bounds  []float64
+	buckets []*Counter // cumulative count of observations <= bounds[i]
+	inf     *Counter
+	sum     *Counter
+	count   *Counter
+}
+
+// DefaultLatencyBuckets are seconds-scale buckets suited to request latencies
+// (50µs … 5s), covering the artificial latencies the emulator injects.
+var DefaultLatencyBuckets = []float64{
+	0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5,
+}
+
+// NewHistogram registers a histogram. buckets must be ascending upper bounds
+// (an implicit +Inf bucket is always added). Passing nil uses DefaultLatencyBuckets.
+func (r *Registry) NewHistogram(name, help string, buckets []float64) *Histogram {
+	if len(buckets) == 0 {
+		buckets = DefaultLatencyBuckets
+	}
+	bv := r.NewCounterVec(name+"_bucket", help, "le")
+	h := &Histogram{
+		bounds: append([]float64(nil), buckets...),
+		inf:    bv.WithLabelValues("+Inf"),
+		sum:    r.NewCounter(name+"_sum", help+" (sum)"),
+		count:  r.NewCounter(name+"_count", help+" (count)"),
+	}
+	for _, b := range buckets {
+		// 'f' (not 'g') keeps small bounds as plain decimals ("0.00005", not
+		// "5e-05"), consistent with the other bucket labels.
+		h.buckets = append(h.buckets, bv.WithLabelValues(strconv.FormatFloat(b, 'f', -1, 64)))
+	}
+	return h
+}
+
+// Observe records one value (e.g. a request latency in seconds).
+func (h *Histogram) Observe(v float64) {
+	h.sum.Add(v)
+	h.count.Inc()
+	h.inf.Inc()
+	for i, b := range h.bounds {
+		if v <= b {
+			h.buckets[i].Inc()
+		}
+	}
+}
+
 func (f *family) gaugeFunc(key string, fn func() float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

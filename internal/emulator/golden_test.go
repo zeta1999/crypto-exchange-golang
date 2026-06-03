@@ -3,6 +3,8 @@ package emulator
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,30 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/reference"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
+
+// TestScenarioGoldenFile pins the full deterministic scenario (replay →
+// reference → seeder → crossing user order → tape print, over a deterministic
+// clock) to a committed golden file, so any unintended change in the emulator's
+// integrated output is caught in CI. Regenerate with UPDATE_GOLDEN=1.
+func TestScenarioGoldenFile(t *testing.T) {
+	got := runDeterministic()
+	path := filepath.Join("testdata", "golden", "deterministic_scenario.txt")
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden (run with UPDATE_GOLDEN=1 to create): %v", err)
+	}
+	if got != string(want) {
+		t.Errorf("scenario output drifted from golden file %s:\n--- got ---\n%s\n--- want ---\n%s", path, got, want)
+	}
+}
 
 // detClock returns a deterministic monotonic clock (base + 1ms per call) so a
 // run's trade timestamps are reproducible — unlike time.Now.

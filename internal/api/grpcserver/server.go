@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/grpc/exchangev1"
+	"github.com/zeta1999/crypto-exchange-golang/internal/metrics"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
@@ -33,6 +36,9 @@ type Server struct {
 	events     <-chan Event
 	watcherSeq atomic.Int64
 	watchers   sync.Map // id -> chan *exchangev1.StreamUpdate
+
+	reqCount *metrics.CounterVec // labels: method, status
+	reqLat   *metrics.Histogram  // unary handler latency (seconds)
 }
 
 // New returns a ready-to-register gRPC handler.
@@ -42,6 +48,12 @@ func New(engine Engine, validator *auth.TokenValidator, events <-chan Event) *Se
 		go srv.consumeEvents()
 	}
 	return srv
+}
+
+// Instrument registers gRPC request metrics on reg (call before ListenAndServe).
+func (s *Server) Instrument(reg *metrics.Registry) {
+	s.reqCount = reg.NewCounterVec("exchange_grpc_requests_total", "gRPC unary requests by method and status", "method", "status")
+	s.reqLat = reg.NewHistogram("exchange_grpc_request_duration_seconds", "gRPC unary handler latency", nil)
 }
 
 func (s *Server) consumeEvents() {
@@ -84,7 +96,26 @@ func (s *Server) authorizeUnary(ctx context.Context, req interface{}, info *grpc
 	if err := s.validator.Validate(token); err != nil {
 		return nil, err
 	}
-	return handler(ctx, req)
+	if s.reqCount == nil {
+		return handler(ctx, req)
+	}
+	start := time.Now()
+	resp, err := handler(ctx, req)
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	s.reqCount.WithLabelValues(shortMethod(info.FullMethod), status).Inc()
+	s.reqLat.Observe(time.Since(start).Seconds())
+	return resp, err
+}
+
+// shortMethod trims "/pkg.Service/Method" to "Method" for a low-cardinality label.
+func shortMethod(full string) string {
+	if i := strings.LastIndexByte(full, '/'); i >= 0 {
+		return full[i+1:]
+	}
+	return full
 }
 
 func tokenFromContext(ctx context.Context) string {

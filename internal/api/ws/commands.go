@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/zeta1999/crypto-exchange-golang/internal/metrics"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
@@ -24,6 +25,15 @@ type Handler struct {
 	engine    Engine
 	validator *auth.TokenValidator
 	upgrader  websocket.Upgrader
+
+	cmdCount *metrics.CounterVec // labels: command, status
+	cmdLat   *metrics.Histogram  // per-command processing latency (seconds)
+}
+
+// Instrument registers native-WS request metrics on reg.
+func (h *Handler) Instrument(reg *metrics.Registry) {
+	h.cmdCount = reg.NewCounterVec("exchange_ws_commands_total", "Native WS commands by command and status", "command", "status")
+	h.cmdLat = reg.NewHistogram("exchange_ws_command_duration_seconds", "Native WS command processing latency", nil)
 }
 
 // NewHandler returns a websocket command processor.
@@ -52,54 +62,88 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		var msg command
-		if err := json.Unmarshal(data, &msg); err != nil {
-			_ = conn.WriteJSON(errorPayload{Error: "invalid_command"})
-			continue
+		h.handleOne(r.Context(), conn, data)
+	}
+}
+
+// handleOne processes a single WS command, recording its command + status and
+// latency into the request metrics (when instrumented).
+func (h *Handler) handleOne(ctx context.Context, conn *websocket.Conn, data []byte) {
+	start := time.Now()
+	cmd, status := "unknown", "ok"
+	defer func() {
+		if h.cmdCount != nil {
+			h.cmdCount.WithLabelValues(cmd, status).Inc()
+			h.cmdLat.Observe(time.Since(start).Seconds())
 		}
-		if err := h.validator.Validate(msg.Token); err != nil {
-			_ = conn.WriteJSON(errorPayload{Error: "unauthorized"})
-			continue
+	}()
+
+	var msg command
+	if err := json.Unmarshal(data, &msg); err != nil {
+		status = "invalid"
+		_ = conn.WriteJSON(errorPayload{Error: "invalid_command"})
+		return
+	}
+	cmd = boundCommand(msg.Command) // bounded label: never raw user input
+	if err := h.validator.Validate(msg.Token); err != nil {
+		status = "unauthorized"
+		_ = conn.WriteJSON(errorPayload{Error: "unauthorized"})
+		return
+	}
+	switch msg.Command {
+	case "snapshot":
+		snap, err := h.engine.Snapshot(msg.Instrument)
+		if err != nil {
+			status = "error"
+			_ = conn.WriteJSON(errorPayload{Error: err.Error()})
+			return
 		}
-		switch msg.Command {
-		case "snapshot":
-			snap, err := h.engine.Snapshot(msg.Instrument)
-			if err != nil {
-				_ = conn.WriteJSON(errorPayload{Error: err.Error()})
-				continue
-			}
-			_ = conn.WriteJSON(snap)
-		case "limit_order":
-			ord := &orderbook.Order{
-				ID:         msg.ClientID,
-				Instrument: msg.Instrument,
-				Price:      decimal.FromFloat(msg.Price),
-				Volume:     decimal.FromFloat(msg.Volume),
-				Side:       orderbook.Side(msg.Side),
-			}
-			trades, snap, err := h.engine.PlaceLimit(r.Context(), ord)
-			if err != nil {
-				_ = conn.WriteJSON(errorPayload{Error: err.Error()})
-				continue
-			}
-			_ = conn.WriteJSON(map[string]interface{}{"trades": trades, "snapshot": snap})
-		case "market_order":
-			ord := &orderbook.Order{
-				ID:         msg.ClientID,
-				Instrument: msg.Instrument,
-				Volume:     decimal.FromFloat(msg.Volume),
-				Side:       orderbook.Side(msg.Side),
-				IsMarket:   true,
-			}
-			trades, snap, err := h.engine.PlaceMarket(r.Context(), ord)
-			if err != nil {
-				_ = conn.WriteJSON(errorPayload{Error: err.Error()})
-				continue
-			}
-			_ = conn.WriteJSON(map[string]interface{}{"trades": trades, "snapshot": snap})
-		default:
-			_ = conn.WriteJSON(errorPayload{Error: "unknown_command"})
+		_ = conn.WriteJSON(snap)
+	case "limit_order":
+		ord := &orderbook.Order{
+			ID:         msg.ClientID,
+			Instrument: msg.Instrument,
+			Price:      decimal.FromFloat(msg.Price),
+			Volume:     decimal.FromFloat(msg.Volume),
+			Side:       orderbook.Side(msg.Side),
 		}
+		trades, snap, err := h.engine.PlaceLimit(ctx, ord)
+		if err != nil {
+			status = "error"
+			_ = conn.WriteJSON(errorPayload{Error: err.Error()})
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{"trades": trades, "snapshot": snap})
+	case "market_order":
+		ord := &orderbook.Order{
+			ID:         msg.ClientID,
+			Instrument: msg.Instrument,
+			Volume:     decimal.FromFloat(msg.Volume),
+			Side:       orderbook.Side(msg.Side),
+			IsMarket:   true,
+		}
+		trades, snap, err := h.engine.PlaceMarket(ctx, ord)
+		if err != nil {
+			status = "error"
+			_ = conn.WriteJSON(errorPayload{Error: err.Error()})
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{"trades": trades, "snapshot": snap})
+	default:
+		status = "unknown"
+		_ = conn.WriteJSON(errorPayload{Error: "unknown_command"})
+	}
+}
+
+// boundCommand maps a (user-supplied) command name to a fixed, low-cardinality
+// metric label so an authenticated client cannot blow up the label space by
+// sending arbitrary command strings.
+func boundCommand(c string) string {
+	switch c {
+	case "snapshot", "limit_order", "market_order":
+		return c
+	default:
+		return "other"
 	}
 }
 

@@ -112,7 +112,9 @@ func main() {
 	}
 
 	grpcSrv := grpcserver.New(eng, tokenValidator, events)
+	grpcSrv.Instrument(reg)
 	wsHandler := wsadapter.NewHandler(eng, tokenValidator)
+	wsHandler.Instrument(reg)
 	uiFS := http.FS(os.DirFS("http/ui"))
 	httpSrv := httpserver.New(newMeteredEngine(eng, ordersPlaced, "native"), tokenValidator, wsHandler, uiFS)
 
