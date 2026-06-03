@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"math/big"
 )
 
 // compactU16 is Solana's short-vec length prefix. We only emit values < 128
@@ -259,9 +260,12 @@ func (s *Solana) LatestCursor(ctx context.Context, address string) (string, erro
 	return sigs[0].Signature, nil
 }
 
-// Received reports incoming SOL deposits since `cursor` (a tx signature). For
-// each newer signature it inspects the tx's pre/post balances for the address;
-// a positive delta is a deposit (a send shows negative → skipped).
+// Received reports incoming deposits since `cursor` (a tx signature). For each
+// newer signature it inspects the tx once, preferring a positive USDC (SPL)
+// token-balance delta, else a positive native-SOL delta. Each tx yields exactly
+// one Payment so the cursor advances atomically (no per-tx split that a crash
+// could half-apply); a send / fee-only tx yields a zero-amount payment that
+// only advances the cursor (Credit is a no-op on 0).
 func (s *Solana) Received(ctx context.Context, address, cursor string) ([]Payment, error) {
 	params := []any{address, map[string]any{"limit": 25}}
 	if cursor != "" {
@@ -277,29 +281,40 @@ func (s *Solana) Received(ctx context.Context, address, cursor string) ([]Paymen
 	var out []Payment
 	for i := len(sigs) - 1; i >= 0; i-- {
 		sig := sigs[i].Signature
-		delta, ok, err := s.balanceDelta(ctx, sig, address)
-		if err != nil || !ok || delta <= 0 {
-			// Not an incoming deposit (a send, fee-only, etc.): advance the cursor
-			// past it with a zero-amount payment (Credit is a no-op on 0).
+		sol, usdc, err := s.txDeltas(ctx, sig, address)
+		switch {
+		case err != nil:
+			// Cannot inspect this tx: advance past it (zero-amount no-op credit)
+			// rather than wedging the watcher on one bad signature.
 			out = append(out, Payment{TxRef: sig, Asset: "SOL", Amount: "0", Cursor: sig})
-			continue
+		case usdc > 0:
+			out = append(out, Payment{TxRef: sig, Asset: "USDC", Amount: formatUnits(uint64(usdc), usdcSolanaDecimals), Cursor: sig})
+		case sol > 0:
+			out = append(out, Payment{TxRef: sig, Asset: "SOL", Amount: formatUnits(uint64(sol), 9), Cursor: sig})
+		default:
+			out = append(out, Payment{TxRef: sig, Asset: "SOL", Amount: "0", Cursor: sig})
 		}
-		out = append(out, Payment{
-			TxRef:  sig,
-			Asset:  "SOL",
-			Amount: formatUnits(uint64(delta), 9),
-			Cursor: sig,
-		})
 	}
 	return out, nil
 }
 
-// balanceDelta returns the address's lamport change in tx sig (post - pre).
-func (s *Solana) balanceDelta(ctx context.Context, sig, address string) (int64, bool, error) {
+// txDeltas returns the address's native-lamport change and its USDC base-unit
+// change (post - pre) in tx sig. The USDC delta sums the owner's matching token
+// balances (the ATA may be created in this tx, so a missing pre counts as 0).
+func (s *Solana) txDeltas(ctx context.Context, sig, address string) (solDelta, usdcDelta int64, err error) {
+	type tokenBal struct {
+		Owner      string `json:"owner"`
+		Mint       string `json:"mint"`
+		UITokenAmt struct {
+			Amount string `json:"amount"` // base units, as a string
+		} `json:"uiTokenAmount"`
+	}
 	var tx struct {
 		Meta struct {
-			PreBalances  []int64 `json:"preBalances"`
-			PostBalances []int64 `json:"postBalances"`
+			PreBalances       []int64    `json:"preBalances"`
+			PostBalances      []int64    `json:"postBalances"`
+			PreTokenBalances  []tokenBal `json:"preTokenBalances"`
+			PostTokenBalances []tokenBal `json:"postTokenBalances"`
 		} `json:"meta"`
 		Transaction struct {
 			Message struct {
@@ -309,12 +324,30 @@ func (s *Solana) balanceDelta(ctx context.Context, sig, address string) (int64, 
 	}
 	cfg := map[string]any{"encoding": "json", "maxSupportedTransactionVersion": 0}
 	if err := jsonRPC(ctx, s.hc, s.rpc, "getTransaction", []any{sig, cfg}, &tx); err != nil {
-		return 0, false, err
+		return 0, 0, err
 	}
+
+	// Native SOL delta for the address's own account.
 	for i, k := range tx.Transaction.Message.AccountKeys {
 		if k == address && i < len(tx.Meta.PreBalances) && i < len(tx.Meta.PostBalances) {
-			return tx.Meta.PostBalances[i] - tx.Meta.PreBalances[i], true, nil
+			solDelta = tx.Meta.PostBalances[i] - tx.Meta.PreBalances[i]
+			break
 		}
 	}
-	return 0, false, nil
+
+	// USDC token delta: sum post minus sum pre over the owner's USDC accounts.
+	sumBal := func(bals []tokenBal) int64 {
+		var total int64
+		for _, b := range bals {
+			if b.Owner != address || b.Mint != usdcSolanaMint {
+				continue
+			}
+			if n, ok := new(big.Int).SetString(b.UITokenAmt.Amount, 10); ok && n.IsInt64() {
+				total += n.Int64()
+			}
+		}
+		return total
+	}
+	usdcDelta = sumBal(tx.Meta.PostTokenBalances) - sumBal(tx.Meta.PreTokenBalances)
+	return solDelta, usdcDelta, nil
 }

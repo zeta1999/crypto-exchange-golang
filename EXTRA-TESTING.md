@@ -67,9 +67,11 @@ sender's + recipient's token accounts via RPC) and broadcasts it. The recipient 
 hold a USDC token account (Circle's drip creates one). Live broadcast needs a devnet-funded
 USDC hot wallet (Circle key / web faucet — see the custody table). Message layout is
 vector-verified offline (`TestSPLTransferMessage`); the resolve + recipient-missing guard is
-covered by `TestSendSPL_*`. Note: the Solana deposit *watcher* (`Received`) credits native SOL
-only — SPL-deposit auto-credit is a follow-up; Stellar remains the live-verified full-loop USDC
-reference.
+covered by `TestSendSPL_*`. The Solana deposit *watcher* (`Received`) now credits USDC too: it
+inspects each tx's pre/post token balances for the watched owner+mint and emits a USDC payment
+(else SOL), so the hub auto-credits the destination ledger — closing the Solana USDC loop in
+code (`TestReceived_USDC`/`TestReceived_SOL`). Stellar remains the live-verified full-loop
+reference; Solana/EVM/BTC live broadcast is faucet-gated.
 
 ## Metrics scrape + rate-limit trip (network: localhost)
 With `metrics.enabled: true`: `curl -s localhost:9090/metrics | grep exchange_`. Hammer a

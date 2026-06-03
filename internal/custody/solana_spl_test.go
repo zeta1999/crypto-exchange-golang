@@ -76,6 +76,87 @@ func TestSendSPL_USDC(t *testing.T) {
 	}
 }
 
+// receivedRPC fakes getSignaturesForAddress + getTransaction so Received can be
+// driven offline. tx is the canned getTransaction.meta for the single signature.
+type receivedRPC struct {
+	meta map[string]any
+}
+
+func (f *receivedRPC) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		write := func(v any) {
+			b, _ := json.Marshal(v)
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":` + string(b) + `}`))
+		}
+		switch req.Method {
+		case "getSignaturesForAddress":
+			write([]any{map[string]any{"signature": "sig1"}})
+		case "getTransaction":
+			write(map[string]any{"meta": f.meta, "transaction": map[string]any{"message": map[string]any{"accountKeys": []any{"watched-addr"}}}})
+		default:
+			write(nil)
+		}
+	}
+}
+
+func TestReceived_USDC(t *testing.T) {
+	// A tx whose postTokenBalances credit the watched owner 1.5 USDC (no pre).
+	meta := map[string]any{
+		"preBalances":      []any{1000},
+		"postBalances":     []any{1000}, // no SOL change
+		"preTokenBalances": []any{},
+		"postTokenBalances": []any{map[string]any{
+			"owner": "watched-addr", "mint": usdcSolanaMint,
+			"uiTokenAmount": map[string]any{"amount": "1500000"}, // 1.5 USDC @ 6 dp
+		}},
+	}
+	ts := httptest.NewServer((&receivedRPC{meta: meta}).handler())
+	defer ts.Close()
+	s := &Solana{hc: http.DefaultClient, rpc: ts.URL}
+
+	pays, err := s.Received(context.Background(), "watched-addr", "")
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if len(pays) != 1 {
+		t.Fatalf("payments = %d, want 1", len(pays))
+	}
+	if pays[0].Asset != "USDC" {
+		t.Fatalf("asset = %q, want USDC", pays[0].Asset)
+	}
+	if pays[0].Amount != "1.5" {
+		t.Fatalf("amount = %q, want 1.5", pays[0].Amount)
+	}
+}
+
+func TestReceived_SOL(t *testing.T) {
+	// A tx that increases the watched account's lamports by 2e9 (2 SOL), no USDC.
+	meta := map[string]any{
+		"preBalances":       []any{1_000_000_000},
+		"postBalances":      []any{3_000_000_000},
+		"preTokenBalances":  []any{},
+		"postTokenBalances": []any{},
+	}
+	ts := httptest.NewServer((&receivedRPC{meta: meta}).handler())
+	defer ts.Close()
+	s := &Solana{hc: http.DefaultClient, rpc: ts.URL}
+
+	pays, err := s.Received(context.Background(), "watched-addr", "")
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if len(pays) != 1 || pays[0].Asset != "SOL" {
+		t.Fatalf("payments = %+v, want one SOL", pays)
+	}
+	if pays[0].Amount != "2" {
+		t.Fatalf("amount = %q, want 2", pays[0].Amount)
+	}
+}
+
 func TestSendSPL_RecipientNoAccount(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(nil)
 	seed := priv.Seed()

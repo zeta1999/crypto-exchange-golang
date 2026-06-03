@@ -59,7 +59,8 @@ go test ./internal/custody/... -count=1
 **Expected:** green. StrKey/base58/bech32/EIP-55 validated against **real on-chain vectors**
 (Circle USDC issuer/mint, secp256k1 privkey=1, BIP-173); transaction signing vector-checked
 (EIP-155, BIP-143, Solana System transfer **and SPL `TransferChecked` for USDC**); the Solana
-SPL send's token-account resolution + recipient-missing-account guard (httptest RPC fake);
+SPL send's token-account resolution + recipient-missing-account guard, and SPL/native deposit
+detection in the watcher (USDC token-balance delta vs SOL lamport delta — httptest RPC fake);
 Argon2id+memguard keystore round-trip + wrong-passphrase + downgraded-KDF rejection;
 Circle/SPL/faucet guards (httptest, no network).
 
