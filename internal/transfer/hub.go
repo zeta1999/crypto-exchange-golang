@@ -183,12 +183,8 @@ func (h *Hub) initCursors(ctx context.Context) {
 			v.cursor = c
 			continue
 		}
-		pays, err := h.backend.Received(ctx, v.address, "")
-		if err != nil {
-			continue
-		}
-		if n := len(pays); n > 0 {
-			v.cursor = pays[n-1].Cursor
+		if c, err := h.backend.LatestCursor(ctx, v.address); err == nil {
+			v.cursor = c // skip existing history on a first run for this venue
 		}
 	}
 }

@@ -324,13 +324,15 @@ func buildTransferHub(cfg config.TransferConfig, ledgers map[string]*account.Led
 	}
 	defer ks.Destroy() // secrets are copied into the hub below; wipe the keystore key
 
-	poll := time.Duration(cfg.PollMs) * time.Millisecond
-	hub := transfer.NewHub(custody.NewStellar(), poll)
-	hub.SetCursorStore("data/transfer-cursors.json") // durable deposit cursors
-	added := 0
+	// Load each venue's hot wallet; all venues in one hub must share a chain (you
+	// can't send across chains), which selects the on-chain backend.
+	type loadedWallet struct {
+		venueID, chain, addr string
+		secret               []byte
+	}
+	var wallets []loadedWallet
 	for venueID, v := range cfg.Venues {
-		led := ledgers[venueID]
-		if led == nil {
+		if ledgers[venueID] == nil {
 			log.Printf("transfer: venue %q has no balances ledger — skipped", venueID)
 			continue
 		}
@@ -339,19 +341,45 @@ func buildTransferHub(cfg config.TransferConfig, ledgers map[string]*account.Led
 			log.Printf("transfer: wallet %q: %v — skipped", v.Wallet, err)
 			continue
 		}
-		if chain != "xlm" {
-			log.Printf("transfer: wallet %q chain %q unsupported (xlm only) — skipped", v.Wallet, chain)
-			continue
-		}
-		hub.AddVenue(venueID, led, secret, addr)
-		log.Printf("transfer: venue %q hot wallet %s", venueID, addr)
-		added++
+		wallets = append(wallets, loadedWallet{venueID, chain, addr, secret})
 	}
-	if added < 1 {
+	if len(wallets) < 1 {
 		log.Printf("transfer: no usable venues — transfer disabled")
 		return nil
 	}
+	chain := wallets[0].chain
+	for _, w := range wallets {
+		if w.chain != chain {
+			log.Printf("transfer: all venues must share a chain (got %q and %q) — disabled", chain, w.chain)
+			return nil
+		}
+	}
+	backend := transferBackend(chain)
+	if backend == nil {
+		log.Printf("transfer: chain %q has no on-chain backend yet — disabled", chain)
+		return nil
+	}
+
+	hub := transfer.NewHub(backend, time.Duration(cfg.PollMs)*time.Millisecond)
+	hub.SetCursorStore("data/transfer-cursors.json") // durable deposit cursors
+	for _, w := range wallets {
+		hub.AddVenue(w.venueID, ledgers[w.venueID], w.secret, w.addr)
+		log.Printf("transfer: venue %q hot wallet %s (%s)", w.venueID, w.addr, w.chain)
+	}
 	return hub
+}
+
+// transferBackend selects the on-chain Sender+Watcher for a chain id. Stellar
+// and EVM are implemented; sol/btc are follow-ups (their Send/Watch land later).
+func transferBackend(chain string) transfer.Backend {
+	switch chain {
+	case "xlm":
+		return custody.NewStellar()
+	case "eth":
+		return custody.NewEVM()
+	default:
+		return nil
+	}
 }
 
 // buildLedger constructs an account.Ledger from a config balances map (asset ->

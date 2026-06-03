@@ -30,6 +30,13 @@ func (f *fakeBackend) Send(_ context.Context, _ []byte, asset, dest, amount stri
 	return ref, nil
 }
 
+func (f *fakeBackend) LatestCursor(_ context.Context, address string) (string, error) {
+	if ps := f.deposits[address]; len(ps) > 0 {
+		return ps[len(ps)-1].Cursor, nil
+	}
+	return "", nil
+}
+
 func (f *fakeBackend) Received(_ context.Context, address, cursor string) ([]custody.Payment, error) {
 	var out []custody.Payment
 	for _, p := range f.deposits[address] {

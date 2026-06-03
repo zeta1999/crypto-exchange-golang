@@ -61,11 +61,15 @@ type Sender interface {
 	Send(ctx context.Context, secret []byte, asset, destAddr, amount string) (txRef string, err error)
 }
 
-// Watcher is an optional Chain capability: list incoming payments to an address
-// (for deposit detection), resuming after `cursor` (exclusive). The returned
-// Payments carry a Cursor to persist for the next poll.
+// Watcher is an optional Chain capability for deposit detection: list incoming
+// payments to an address resuming after `cursor` (exclusive), and report the
+// current tip cursor so a first run starts "now" rather than scanning history.
+// The returned Payments carry a Cursor to persist for the next poll.
 type Watcher interface {
 	Received(ctx context.Context, address, cursor string) ([]Payment, error)
+	// LatestCursor returns the chain's current tip cursor for address (so a fresh
+	// watcher skips existing history). "" means "from the beginning".
+	LatestCursor(ctx context.Context, address string) (string, error)
 }
 
 // Payment is one incoming on-chain payment observed by a Watcher.

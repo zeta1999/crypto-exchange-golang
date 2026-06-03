@@ -64,6 +64,27 @@ func (s *Stellar) Send(ctx context.Context, secret []byte, asset, destAddr, amou
 	return resp.Hash, nil
 }
 
+// LatestCursor returns the paging token of the address's most recent payment, so
+// a fresh watcher starts after existing history. "" if the account has none.
+func (s *Stellar) LatestCursor(ctx context.Context, address string) (string, error) {
+	client := horizonclient.DefaultTestNetClient
+	page, err := client.Payments(horizonclient.OperationRequest{
+		ForAccount: address,
+		Order:      horizonclient.OrderDesc,
+		Limit:      1,
+	})
+	if err != nil {
+		if isHTTPStatus(err, 404) { // account not yet created
+			return "", nil
+		}
+		return "", fmt.Errorf("xlm: latest cursor: %w", horizonError(err))
+	}
+	if len(page.Embedded.Records) == 0 {
+		return "", nil
+	}
+	return page.Embedded.Records[0].PagingToken(), nil
+}
+
 // Received lists incoming payments to address after cursor (exclusive), for
 // deposit detection. Only credits TO the address are returned.
 func (s *Stellar) Received(ctx context.Context, address, cursor string) ([]Payment, error) {
