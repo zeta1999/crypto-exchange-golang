@@ -30,8 +30,10 @@
 > Coinbase-mirroring exchange you can trade against. Done & reviewed: live feed → reference book →
 > seeding → return-to-reference → trade replay → toxicity, exact fixed-point pricing, **Binance-
 > and Coinbase-compatible REST + WebSocket APIs**, fault injection (price-shift / latency /
-> scripted scenarios), and metrics + rate limiting. Remaining (mostly stretch/tail): full trace
-> replay through the whole emulator, cross-venue arb harness, testnet custody. Progress in
+> scripted scenarios), metrics + rate limiting, full trace replay (+ speed pacing), a cross-venue
+> arb harness, a **CCXT-go conformance pass** (a stock client drives the edge with only a base-URL
+> change), and a **testnet custody/faucet toolkit** (XLM/SOL/ETH/ERC20/USDC/BTC, encrypted at
+> rest). Remaining (tail): scenario golden-file CI tests, gRPC/WS request metrics. Progress in
 > [STATUS.md](STATUS.md), checklist in [TODO.md](TODO.md), design in [PLAN.md](PLAN.md).
 
 ## Why
@@ -58,10 +60,11 @@ Purpose-built for technical and scenario testing of trading / OMS systems:
 
 | Control | Use |
 |---------|-----|
-| **Trace replay** | Replay past market events from recorded traces — deterministic, repeatable scenario runs at real-time or accelerated `speed`. |
-| **Artificial latency** | Inject configurable delays (feed→book, order ack, fill report, per-API-edge) to test how your OMS handles slow venues and races. |
-| **Artificial price shift** | Offset / scale the reference price per venue to manufacture **cross-venue dislocations** — a controlled lab for **arbitrage** and relative-value models. |
-| **Seedable determinism** | Matching is deterministic; RTR + toxicity use a seeded RNG, so a scenario reproduces bit-for-bit. |
+| **Record & replay** | Record any live Coinbase/Binance session to a trace, then replay it deterministically (real-time or accelerated `speed`) — the basis for repeatable unit/scenario tests. |
+| **Artificial latency** | Inject delays (feed→book, order ack, fill report; per-API-edge). Either a **fixed** extra delay or a **stochastic** one — uniform jitter, or a **shifted-Poisson** (fixed base + Poisson-distributed tail). |
+| **Fault & scenario injection** | A JSONL timeline mutates the fault knobs on cue mid-run (price shift, latency, toxicity) — basic chaos engineering for an OMS under test. |
+| **Artificial price shift** | Offset / scale the reference price per venue to manufacture **cross-venue dislocations** — a controlled lab for **arbitrage** and relative-value models (see the cross-venue arb harness). |
+| **Seedable determinism** | Matching uses an injectable clock; RTR + toxicity + latency use a seeded RNG, so a scenario reproduces **bit-for-bit** (asserted by golden tests). |
 
 ### API surface
 
