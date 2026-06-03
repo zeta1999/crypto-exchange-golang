@@ -45,7 +45,9 @@ go test ./internal/api/binance/... ./internal/api/coinbase/... ./internal/accoun
 **Expected:** green. Covers signed REST/WS, the CCXT-style body-signed POST, exchangeInfo /
 products discovery, fill-report latency, the **Binance `@depth` incremental diff stream**
 (depthUpdate deltas + monotonic U/u continuity, REST `lastUpdateId` sync), the **Coinbase fee
-fields** (total_fees/total_value_after_fees per side, product price_increment), the **balance
+fields** (total_fees/total_value_after_fees per side, product price_increment), the **Coinbase
+level2 incremental diffs** (snapshot-then-changed-levels, removals as new_quantity "0",
+snapshot-first ordering), the **balance
 ledger** (lock-on-place, settle-on-fill with price-improvement refund, cancel-unlock,
 insufficient-balance rejection, underfunded-market no-mint guard), and the **transfer flow**
 (withdraw endpoint, native `/transfer`, hub debit→send→credit with the precision-quantize
@@ -62,7 +64,8 @@ go test ./internal/custody/... -count=1
 SPL send's token-account resolution + recipient-missing-account guard, and SPL/native deposit
 detection in the watcher (USDC token-balance delta vs SOL lamport delta — httptest RPC fake);
 Argon2id+memguard keystore round-trip + wrong-passphrase + downgraded-KDF rejection;
-Circle/SPL/faucet guards (httptest, no network).
+deposit-watch detection for **EVM USDC** (ERC20 Transfer logs) + **BTC** (Esplora address
+vouts) + **Solana** USDC/SOL (httptest RPC/Esplora fakes); Circle/SPL/faucet guards (no network).
 
 ## 5. Offline binary smoke (replay venue, plain HTTP, no network)
 

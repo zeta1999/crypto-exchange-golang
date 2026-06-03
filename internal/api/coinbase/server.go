@@ -25,23 +25,24 @@ type Engine interface {
 // Server is a Coinbase-Advanced-Trade-compatible REST edge. It is an
 // http.Handler that routes the /api/v3/brokerage subset to the engine.
 type Server struct {
-	engine      Engine
-	products    *Products
-	auth        *Authenticator
-	registry    *Registry
-	mux         *http.ServeMux
-	now         func() time.Time
-	accounts    []Account
-	broadcaster *Broadcaster
-	tradeSeq    atomic.Int64
-	limiter     *ratelimit.KeyedLimiter
-	metrics     *Metrics
-	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
-	ackDelay    func() time.Duration
-	fillDelay   func() time.Duration
-	ledger      *account.Ledger // optional: real balances + lock/settle on trade
-	withdraw    WithdrawFunc    // optional: on-chain withdrawal (transfer hub)
-	feeRate     decimal.Decimal // taker fee rate applied to filled value (0 => defaultFeeRate)
+	engine       Engine
+	products     *Products
+	auth         *Authenticator
+	registry     *Registry
+	mux          *http.ServeMux
+	now          func() time.Time
+	accounts     []Account
+	broadcaster  *Broadcaster
+	tradeSeq     atomic.Int64
+	limiter      *ratelimit.KeyedLimiter
+	metrics      *Metrics
+	handler      http.Handler // mux wrapped with rate-limit + metrics middleware
+	ackDelay     func() time.Duration
+	fillDelay    func() time.Duration
+	ledger       *account.Ledger // optional: real balances + lock/settle on trade
+	withdraw     WithdrawFunc    // optional: on-chain withdrawal (transfer hub)
+	feeRate      decimal.Decimal // taker fee rate applied to filled value (0 => defaultFeeRate)
+	level2Differ *level2Differ   // per-product baseline for incremental level2 updates
 }
 
 // defaultFeeRate is the fee fraction applied to an order's filled quote value
@@ -182,13 +183,14 @@ func (s *Server) sleepAck(ctx context.Context) {
 // registry's OnTrade/OnCancel hooks onto the order book (see AttachHooks).
 func New(engine Engine, products *Products, auth *Authenticator, registry *Registry, opts ...Option) *Server {
 	s := &Server{
-		engine:      engine,
-		products:    products,
-		auth:        auth,
-		registry:    registry,
-		mux:         http.NewServeMux(),
-		now:         time.Now,
-		broadcaster: NewBroadcaster(),
+		engine:       engine,
+		products:     products,
+		auth:         auth,
+		registry:     registry,
+		mux:          http.NewServeMux(),
+		now:          time.Now,
+		broadcaster:  NewBroadcaster(),
+		level2Differ: newLevel2Differ(),
 	}
 	for _, opt := range opts {
 		opt(s)

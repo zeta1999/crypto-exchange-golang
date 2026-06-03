@@ -21,9 +21,6 @@ const (
 	writeWait      = 10 * time.Second
 )
 
-// level2Levels caps the number of book levels carried in a level2 frame.
-const level2Levels = 50
-
 // readLimit bounds an inbound subscribe message; Coinbase product_ids lists are
 // small, but allow generous room for a multi-product subscription.
 const readLimit = 16 * 1024
@@ -238,23 +235,27 @@ func (s *Server) handleMarketSub(c *wsConn, msg *subscribeMsg, sub bool) {
 			c.trySendErr(s, msg.Channel, "unknown product_id: "+product)
 			continue
 		}
-		if sub {
-			s.broadcaster.subscribeMarket(c, msg.Channel, product)
-			accepted = append(accepted, product)
-		} else {
+		if !sub {
 			s.broadcaster.unsubscribeMarket(c, msg.Channel, product)
 			accepted = append(accepted, product)
+			continue
 		}
+		// market_trades registers immediately (no snapshot). level2 registration
+		// is deferred to subscribeLevel2 so it is ordered with the snapshot push.
+		if msg.Channel != chanLevel2 {
+			s.broadcaster.subscribeMarket(c, msg.Channel, product)
+		}
+		accepted = append(accepted, product)
 	}
 	if len(accepted) == 0 {
 		return // every product was invalid; error frames already sent.
 	}
 	s.sendAck(c, msg.Channel, accepted)
-	// On a fresh level2 subscribe, push an immediate snapshot so the client
-	// does not wait up to level2Interval for its first book frame.
+	// On a fresh level2 subscribe, register + push the snapshot atomically (under
+	// the differ lock) so the client gets its "snapshot" before any "update".
 	if sub && msg.Channel == chanLevel2 {
 		for _, product := range accepted {
-			s.pushLevel2(c, product, true)
+			s.subscribeLevel2(c, product)
 		}
 	}
 }
@@ -345,13 +346,11 @@ func (s *Server) frame(c *wsConn, channel string, event interface{}) []byte {
 
 // --- level2 ticker ---
 
-// Start runs the periodic level2 refresh loop until ctx is cancelled. It is
-// safe to call once; ListenAndServe starts it automatically. Each tick pushes a
-// fresh top-N book "update" frame for every subscribed product.
-//
-// For this subset, a level2 "update" re-sends a bounded top-N book as a partial
-// refresh rather than computing true incremental diffs — documented as a
-// partial-book refresh.
+// Start runs the periodic level2 diff loop until ctx is cancelled. It is safe to
+// call once; ListenAndServe starts it automatically. Each tick computes the book
+// delta since the previous push for every subscribed product and broadcasts an
+// "update" frame carrying only the changed levels (removals as new_quantity
+// "0"). A quiet tick sends nothing.
 func (s *Server) Start(ctx context.Context) {
 	if s.broadcaster == nil {
 		return
@@ -375,11 +374,25 @@ func (s *Server) pushLevel2Tick() {
 	}
 }
 
-// broadcastLevel2 snapshots the engine book and broadcasts a level2 "update"
-// frame to all subscribers of product.
+// broadcastLevel2 computes the book delta since the last push and, when the book
+// changed, broadcasts a level2 "update" frame to all subscribers of product.
 func (s *Server) broadcastLevel2(product string) {
-	updates, ok := s.level2Updates(product)
+	engSym, ok := s.products.Resolve(product)
 	if !ok {
+		return
+	}
+	snap, err := s.engine.Snapshot(engSym)
+	if err != nil {
+		return
+	}
+	// Hold the differ lock across the diff AND the broadcast so it is serialized
+	// with subscribeLevel2 (same differ.mu → broadcaster.mu lock order): a new
+	// subscriber is either fully snapshotted+registered before this update, or
+	// joins after the baseline advanced and its snapshot already includes it.
+	s.level2Differ.mu.Lock()
+	defer s.level2Differ.mu.Unlock()
+	updates, changed := s.level2Differ.diffLocked(product, snap, s.now().UTC().Format(time.RFC3339))
+	if !changed {
 		return
 	}
 	ev := l2Event{Type: "update", ProductID: product, Updates: updates}
@@ -388,57 +401,31 @@ func (s *Server) broadcastLevel2(product string) {
 	})
 }
 
-// pushLevel2 sends a single level2 frame to one connection. snapshot selects
-// the "snapshot" type (sent on subscribe) vs "update".
-func (s *Server) pushLevel2(c *wsConn, product string, snapshot bool) {
-	updates, ok := s.level2Updates(product)
+// subscribeLevel2 enqueues the initial "snapshot" frame to c and THEN registers
+// it, all under the differ lock. Because broadcastLevel2 holds the same lock
+// across its diff+publish, this guarantees: (1) the snapshot is enqueued before
+// c is a subscriber, so no "update" can precede it (snapshot-first, monotonic
+// sequence_num); and (2) no baseline advance happens between the snapshot and
+// registration, so c never misses a change. Updates diff from the same baseline
+// the snapshot was built from.
+func (s *Server) subscribeLevel2(c *wsConn, product string) {
+	engSym, ok := s.products.Resolve(product)
 	if !ok {
 		return
 	}
-	typ := "update"
-	if snapshot {
-		typ = "snapshot"
-	}
-	ev := l2Event{Type: typ, ProductID: product, Updates: updates}
-	if frame := s.frame(c, "l2_data", ev); frame != nil {
-		_ = c.trySend(frame)
-	}
-}
-
-// level2Updates builds the top-N bid/offer levels for product as l2 updates.
-// Bids are emitted with side "bid", asks with side "offer" (Coinbase wire).
-func (s *Server) level2Updates(product string) ([]l2Update, bool) {
-	engSym, ok := s.products.Resolve(product)
-	if !ok {
-		return nil, false
-	}
 	snap, err := s.engine.Snapshot(engSym)
 	if err != nil {
-		return nil, false
+		return
 	}
 	eventTime := s.now().UTC().Format(time.RFC3339)
-	updates := make([]l2Update, 0, level2Levels*2)
-	updates = appendLevels(updates, snap.Bids, "bid", eventTime)
-	updates = appendLevels(updates, snap.Asks, "offer", eventTime)
-	return updates, true
-}
 
-// appendLevels appends up to level2Levels of levels as l2 updates of the given
-// side.
-func appendLevels(dst []l2Update, levels []orderbook.Level, side, eventTime string) []l2Update {
-	n := len(levels)
-	if n > level2Levels {
-		n = level2Levels
+	s.level2Differ.mu.Lock()
+	defer s.level2Differ.mu.Unlock()
+	updates := s.level2Differ.snapshotUpdatesLocked(product, snap, eventTime)
+	if frame := s.frame(c, "l2_data", l2Event{Type: "snapshot", ProductID: product, Updates: updates}); frame != nil {
+		_ = c.trySend(frame) // enqueue snapshot BEFORE registering
 	}
-	for i := 0; i < n; i++ {
-		dst = append(dst, l2Update{
-			Side:        side,
-			EventTime:   eventTime,
-			PriceLevel:  levels[i].Price.StringPrec(pricePrec),
-			NewQuantity: levels[i].Volume.StringPrec(sizePrec),
-		})
-	}
-	return dst
+	s.broadcaster.subscribeMarket(c, chanLevel2, product)
 }
 
 // --- book trade hook -> market_trades + user channels ---

@@ -149,8 +149,13 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] Solana SPL **deposit-watch** auto-credit — `Received` inspects pre/post token balances and
       emits a USDC payment (else SOL), so the hub credits the destination ledger. Full Solana USDC
       loop is code-complete (send + watch); vector/RPC-fake tested (`TestReceived_USDC`).
+- [x] EVM (ERC20/USDC Transfer logs) + BTC (Esplora address vouts) **deposit-watch** now covered by
+      tests (`TestEVMReceived_USDC`, `TestBTCReceived`) — USDC auto-credit complete on EVM too.
+- [x] Coinbase **true level2 incremental diffs** — `level2Differ` emits snapshot + changed-levels
+      updates (removals as new_quantity "0"); snapshot-first ordering, miss-free (`TestLevel2Differ`,
+      `TestWSLevel2Incremental`). Reviewed.
 - [ ] (follow-up) live broadcast/verification of EVM/SOL/BTC sends (faucet/captcha-gated, unverifiable
-      offline); EVM/BTC deposit-watch for USDC are ERC20-log / address-based and similar if needed.
+      offline).
 
 ## Phase 11 — Hardening & observability
 - [x] Prometheus-text metrics (`internal/metrics`, dependency-free): orders/trades/cancels by edge, feed events, converge/RTR/tape/toxicity, per-instrument synthetic/anomalies/crossings/stale/VPIN/λ gauges; `:9090/metrics`
