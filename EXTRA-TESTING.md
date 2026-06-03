@@ -22,10 +22,31 @@ Expect a 20-level/side uncrossed book, exact decimal strings.
 Boot the binary with the Binance edge on plain HTTP + a seeded `balances:` (see TESTING.md §5
 config, add the edge), then:
 ```sh
-cd conformance/ccxt-go && go run .
+cd conformance/ccxt-go && go run .            # binance (HMAC)
 ```
 Expect: `CCXT-GO CONFORMANCE: PASS` (loadMarkets → fetchOrderBook → createLimitOrder →
 fetchOpenOrders → cancelOrder). See `conformance/ccxt-go/README.md`.
+
+### Coinbase ES256-JWT conformance (verified)
+A **stock `ccxt.NewCoinbase`** (Advanced Trade, ES256 JWT) drives the same lifecycle against the
+Coinbase edge — only the base URL is changed. Generate an EC P-256 keypair, boot the edge with
+the **public** PEM as `coinbase.jwt_public_key`, and hand the harness the **private** PEM:
+```sh
+openssl ecparam -genkey -name prime256v1 -noout -out /tmp/cb-priv.pem   # SEC1; PKCS8 also works
+openssl ec -in /tmp/cb-priv.pem -pubout -out /tmp/cb-pub.pem
+# Boot the exchange with api.coinbase.enabled, jwt_public_key: <contents of cb-pub.pem>,
+# products: ["BTC-USD"], balances: { USD, BTC }, emulator.enabled: false, plain HTTP on :8083.
+cd conformance/ccxt-go
+COINBASE_URL=http://localhost:8083 COINBASE_API_KEY=test-key \
+  COINBASE_SECRET_FILE=/tmp/cb-priv.pem go run . coinbase
+rm -f /tmp/cb-priv.pem /tmp/cb-pub.pem        # the private key is a secret — delete it
+```
+Expect `CCXT-GO CONFORMANCE: PASS`. ccxt builds the JWT (`alg:ES256, kid:apiKey`, claims
+`sub/exp=nbf+120/uri`) from the PEM secret; the edge verifies the signature against the public
+key. Negative check: an unsigned, garbage-bearer, or tampered-signature `POST .../orders` all
+return **401** while the ccxt-signed calls succeed. ccxt-go (>= v4.5) discovers via the public
+`brokerage/market/products` + `brokerage/market/product_book` paths (aliased to the legacy
+routes — see `TestMarketAliasRoutes`).
 
 ## Metrics scrape + rate-limit trip (network: localhost)
 With `metrics.enabled: true`: `curl -s localhost:9090/metrics | grep exchange_`. Hammer a
@@ -84,8 +105,5 @@ mostly captcha/key-gated), then a `/transfer` or signed withdraw moves them on-c
 Stellar `Send` routes USDC as a CreditAsset); on EVM, USDC/USDT move as ERC20 `transfer` calldata.
 
 ### Coinbase CCXT conformance
-The Coinbase edge's public market-data endpoints (`/products`, `/product_book`) are
-CCXT-`loadMarkets`/`fetchOrderBook` compatible (same shape as the Binance harness in
-`conformance/ccxt-go`). Signed calls (createOrder/cancel) use **ES256 JWT** — configure
-`coinbase.jwt_public_key` and point `ccxt.NewCoinbase` (the Advanced Trade class) at the edge
-with a matching EC key. A full signed run is the live follow-up.
+Done — see "Coinbase ES256-JWT conformance (verified)" above. A stock `ccxt.NewCoinbase`
+(Advanced Trade) runs the full signed lifecycle against the edge with a matching EC key.

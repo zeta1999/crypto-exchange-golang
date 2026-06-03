@@ -184,7 +184,11 @@ func (s *Server) handleProduct(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errInvalidArgument("method not allowed"))
 		return
 	}
-	productID := strings.TrimPrefix(r.URL.Path, "/api/v3/brokerage/products/")
+	// Accept both the legacy ("products/") and current ccxt ("market/products/")
+	// public product-detail paths.
+	productID := r.URL.Path
+	productID = strings.TrimPrefix(productID, "/api/v3/brokerage/market/products/")
+	productID = strings.TrimPrefix(productID, "/api/v3/brokerage/products/")
 	if productID == "" || strings.Contains(productID, "/") {
 		writeError(w, errInvalidArgument("product_id is required"))
 		return

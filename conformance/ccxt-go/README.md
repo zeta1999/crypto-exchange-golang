@@ -1,11 +1,18 @@
 # CCXT-Go conformance smoke
 
 Points the **stock** [`ccxt-go`](https://pkg.go.dev/github.com/ccxt/ccxt/go/v4)
-`binance` client at our Binance-compatible edge — changing **only the base
-URL** — and runs the normal client lifecycle:
+client at our compatible edge — changing **only the base URL** — and runs the
+normal client lifecycle:
 
 ```
 loadMarkets → fetchOrderBook → createLimitOrder → fetchOpenOrders → cancelOrder
+```
+
+Two modes (one binary):
+
+```sh
+go run .            # binance  (HMAC-SHA256)  — edge on :8092
+go run . coinbase   # coinbase (Advanced Trade, ES256 JWT) — edge on :8083
 ```
 
 If an unmodified exchange client drives the edge end-to-end, the edge is
@@ -70,9 +77,29 @@ query string:
 Both fixed in `internal/api/binance/auth.go` with regression tests in
 `auth_test.go` (`TestVerify_BodySignedPOST`, `TestVerify_BodyTamperedRejected`).
 
-## Coinbase
+## Coinbase (ES256 JWT) — `go run . coinbase`
 
-The modern `ccxt.coinbase` class uses ES256 JWT (which the edge supports); the
-legacy HMAC (`CB-ACCESS-*`) path is `coinbaseadvanced`/older. A Coinbase
-conformance harness is a follow-up — pick the CCXT class matching the auth
-scheme under test.
+`ccxt.NewCoinbase` is the Advanced Trade class; it signs with **ES256 JWT** when
+the secret is a PEM EC private key. The harness:
+
+1. constructs `ccxt.NewCoinbase` **without credentials** (public `loadMarkets`),
+   `Options["fetchCurrencies"] = false`,
+2. rewrites `Urls["api"]["rest"]` to the local edge (the only change),
+3. after `loadMarkets`, sets `ApiKey` = key name and `Secret` = the PEM EC
+   private key, which triggers ccxt's JWT path for the signed calls.
+
+Generate a key, boot the edge with the **public** PEM as
+`coinbase.jwt_public_key`, then:
+
+```sh
+openssl ecparam -genkey -name prime256v1 -noout -out /tmp/cb-priv.pem
+openssl ec -in /tmp/cb-priv.pem -pubout -out /tmp/cb-pub.pem
+COINBASE_URL=http://localhost:8083 COINBASE_API_KEY=test-key \
+  COINBASE_SECRET_FILE=/tmp/cb-priv.pem go run . coinbase
+rm -f /tmp/cb-priv.pem /tmp/cb-pub.pem   # the private key is a secret
+```
+
+Verified `CCXT-GO CONFORMANCE: PASS`. ccxt-go (>= v4.5) discovers markets via the
+public `brokerage/market/products` and reads depth via `brokerage/market/product_book`;
+the edge aliases both to the legacy routes (`internal/api/coinbase`, `TestMarketAliasRoutes`).
+See EXTRA-TESTING.md for the full runbook + the 401 negative checks.

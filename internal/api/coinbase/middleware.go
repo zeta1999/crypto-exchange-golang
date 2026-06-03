@@ -98,7 +98,7 @@ func endpointLabel(path string) string {
 	switch path {
 	case base + "time":
 		return base + "time"
-	case base + "product_book":
+	case base + "product_book", base + "market/product_book":
 		return base + "product_book"
 	case base + "orders":
 		return base + "orders"
@@ -112,6 +112,10 @@ func endpointLabel(path string) string {
 		return "/ws"
 	}
 	switch {
+	case path == base+"market/products":
+		return base + "products"
+	case strings.HasPrefix(path, base+"market/products/"):
+		return base + "products/{id}"
 	case strings.HasPrefix(path, base+"products/"):
 		return base + "products/{id}"
 	case strings.HasPrefix(path, base+"orders/historical/"):

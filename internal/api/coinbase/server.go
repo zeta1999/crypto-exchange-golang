@@ -174,8 +174,13 @@ func New(engine Engine, products *Products, auth *Authenticator, registry *Regis
 	// Public (unsigned) endpoints.
 	s.mux.HandleFunc("/api/v3/brokerage/time", s.handleTime)
 	s.mux.HandleFunc("/api/v3/brokerage/product_book", s.handleProductBook)
+	s.mux.HandleFunc("/api/v3/brokerage/market/product_book", s.handleProductBook)
 	s.mux.HandleFunc("/api/v3/brokerage/products", s.handleProducts)
 	s.mux.HandleFunc("/api/v3/brokerage/products/", s.handleProduct)
+	// ccxt-go (>= v4.5) discovers markets via the public "market/products" path;
+	// alias it to the same handlers so a stock client's loadMarkets works.
+	s.mux.HandleFunc("/api/v3/brokerage/market/products", s.handleProducts)
+	s.mux.HandleFunc("/api/v3/brokerage/market/products/", s.handleProduct)
 
 	// SIGNED endpoints.
 	s.mux.HandleFunc("/api/v3/brokerage/orders", s.handleCreateOrder)
