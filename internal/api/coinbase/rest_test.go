@@ -32,7 +32,7 @@ type testHarness struct {
 	tsSec    int64
 }
 
-func newHarness(t *testing.T) *testHarness {
+func newHarness(t *testing.T, opts ...Option) *testHarness {
 	t.Helper()
 	tsSec := int64(1_700_000_000)
 	clock := func() time.Time { return time.Unix(tsSec, 0).UTC() }
@@ -42,7 +42,7 @@ func newHarness(t *testing.T) *testHarness {
 	products := NewProducts([]string{"BTC-USD", "ETH-USD"})
 	authn := NewAuthenticator(testAPIKey, testSecret, testPassphrase, clock)
 	registry := NewRegistry(clock)
-	csrv := New(eng, products, authn, registry, WithClock(clock))
+	csrv := New(eng, products, authn, registry, append([]Option{WithClock(clock)}, opts...)...)
 	csrv.AttachHooks(book)
 
 	ts := httptest.NewServer(csrv.Handler())

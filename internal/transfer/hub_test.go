@@ -101,6 +101,42 @@ func TestHubWithdrawQuantizes(t *testing.T) {
 	}
 }
 
+// TestHubDurableCursor: a persisted cursor is reloaded on a new hub, so a
+// venue resumes from where it left off (deposits during downtime still credit).
+func TestHubDurableCursor(t *testing.T) {
+	path := t.TempDir() + "/cursors.json"
+
+	// Run 1: deposit at cursor "1" credited; cursor persisted.
+	be := &fakeBackend{deposits: map[string][]custody.Payment{
+		"addrC": {{TxRef: "tx1", Asset: "XLM", Amount: "10", Cursor: "1"}},
+	}}
+	lc := led("0")
+	h1 := NewHub(be, time.Second)
+	h1.SetCursorStore(path)
+	h1.AddVenue("coinbase", lc, []byte("s"), "addrC")
+	// initCursors with no saved file → skips the existing deposit (history).
+	h1.initCursors(context.Background())
+	h1.saveCursors()
+	if lc.Get("XLM").Free.Sign() != 0 {
+		t.Fatal("first run must skip pre-existing deposits")
+	}
+
+	// A NEW deposit arrives at cursor "2".
+	be.deposits["addrC"] = append(be.deposits["addrC"], custody.Payment{TxRef: "tx2", Asset: "XLM", Amount: "10", Cursor: "2"})
+
+	// Run 2 (restart): a fresh hub reloads the persisted cursor ("1") and credits
+	// only the new deposit ("2"), not the historical one ("1").
+	lc2 := led("0")
+	h2 := NewHub(be, time.Second)
+	h2.SetCursorStore(path)
+	h2.AddVenue("coinbase", lc2, []byte("s"), "addrC")
+	h2.initCursors(context.Background())
+	h2.poll(context.Background())
+	if lc2.Get("XLM").Free.Cmp(decimal.MustParse("10")) != 0 {
+		t.Errorf("after restart credited %s, want 10 (only the new deposit)", lc2.Get("XLM").Free)
+	}
+}
+
 func TestHubWithdrawInsufficient(t *testing.T) {
 	be := &fakeBackend{deposits: map[string][]custody.Payment{}}
 	h := NewHub(be, time.Second)

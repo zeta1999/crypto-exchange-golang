@@ -665,6 +665,52 @@ type accountsResponse struct {
 	Size     int       `json:"size"`
 }
 
+// withdrawRequest is the POST .../withdraw body.
+type withdrawRequest struct {
+	Currency string `json:"currency"`
+	Amount   string `json:"amount"`
+	Address  string `json:"address"`
+}
+
+// handleWithdraw: POST /api/v3/brokerage/withdraw (SIGNED). Debits the ledger
+// and sends an on-chain testnet payment to `address` (the destination venue's
+// deposit address); returns the tx ref as the withdrawal id.
+func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, errInvalidArgument("method not allowed"))
+		return
+	}
+	if s.withdraw == nil {
+		writeError(w, errInvalidArgument("withdrawals not enabled"))
+		return
+	}
+	body, err := s.readSignedBody(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var req withdrawRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, errInvalidArgument("invalid body"))
+		return
+	}
+	if req.Currency == "" || req.Address == "" {
+		writeError(w, errInvalidArgument("currency and address are required"))
+		return
+	}
+	amount, err := decimal.Parse(req.Amount)
+	if err != nil || amount.Sign() <= 0 {
+		writeError(w, errInvalidArgument("invalid amount"))
+		return
+	}
+	ref, err := s.withdraw(r.Context(), req.Currency, amount, req.Address)
+	if err != nil {
+		writeError(w, errInvalidArgument(err.Error())) // surfaces "insufficient …" / send failure
+		return
+	}
+	writeJSON(w, map[string]string{"id": ref})
+}
+
 // handleAccounts: GET /api/v3/brokerage/accounts (SIGNED).
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

@@ -11,6 +11,7 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/account"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // Engine is the subset of the matching engine the Coinbase edge consumes.
@@ -39,6 +40,16 @@ type Server struct {
 	ackDelay    func() time.Duration
 	fillDelay   func() time.Duration
 	ledger      *account.Ledger // optional: real balances + lock/settle on trade
+	withdraw    WithdrawFunc    // optional: on-chain withdrawal (transfer hub)
+}
+
+// WithdrawFunc debits this venue's ledger and sends an on-chain payment of
+// `asset` to `destAddr`, returning the tx ref. Wired from the transfer hub.
+type WithdrawFunc func(ctx context.Context, asset string, amount decimal.Decimal, destAddr string) (string, error)
+
+// WithWithdraw enables POST /api/v3/brokerage/withdraw.
+func WithWithdraw(fn WithdrawFunc) Option {
+	return func(s *Server) { s.withdraw = fn }
 }
 
 // WithLedger wires a balance ledger so /accounts reports live balances and LIMIT
@@ -172,6 +183,7 @@ func New(engine Engine, products *Products, auth *Authenticator, registry *Regis
 	s.mux.HandleFunc("/api/v3/brokerage/orders/historical/batch", s.handleHistoricalBatch)
 	s.mux.HandleFunc("/api/v3/brokerage/orders/historical/", s.handleHistoricalOrder)
 	s.mux.HandleFunc("/api/v3/brokerage/accounts", s.handleAccounts)
+	s.mux.HandleFunc("/api/v3/brokerage/withdraw", s.handleWithdraw)
 
 	// WebSocket: single message-driven endpoint (client sends subscribe frames).
 	s.mux.HandleFunc("/ws", s.handleWS)

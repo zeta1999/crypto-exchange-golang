@@ -257,6 +257,11 @@ func main() {
 		if coinbaseLedger != nil {
 			opts = append(opts, coinbase.WithLedger(coinbaseLedger))
 		}
+		if transferHub != nil {
+			opts = append(opts, coinbase.WithWithdraw(func(ctx context.Context, asset string, amount decimal.Decimal, dest string) (string, error) {
+				return transferHub.Withdraw(ctx, "coinbase", asset, amount, dest)
+			}))
+		}
 		if apiAckDelay != nil {
 			opts = append(opts, coinbase.WithAckDelay(apiAckDelay))
 		}
@@ -321,6 +326,7 @@ func buildTransferHub(cfg config.TransferConfig, ledgers map[string]*account.Led
 
 	poll := time.Duration(cfg.PollMs) * time.Millisecond
 	hub := transfer.NewHub(custody.NewStellar(), poll)
+	hub.SetCursorStore("data/transfer-cursors.json") // durable deposit cursors
 	added := 0
 	for venueID, v := range cfg.Venues {
 		led := ledgers[venueID]

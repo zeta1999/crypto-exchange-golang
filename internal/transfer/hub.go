@@ -9,9 +9,11 @@ package transfer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -53,6 +55,8 @@ type Transfer struct {
 type Hub struct {
 	backend   Backend
 	pollEvery time.Duration
+
+	cursorPath string // optional: persist venue→cursor across restarts
 
 	mu       sync.Mutex
 	venues   map[string]*venue
@@ -144,10 +148,18 @@ func (h *Hub) Inflight() []Transfer {
 	return out
 }
 
-// Start initialises each venue's deposit cursor to "now" (so only NEW deposits
-// credit, not historical ones) and runs the watch loop until ctx is done.
+// SetCursorStore persists deposit cursors to path across restarts, so a deposit
+// that lands while the process is down is still credited on the next run. When
+// unset, cursors are in-memory only (a restart skips history). Call before Start.
+func (h *Hub) SetCursorStore(path string) { h.cursorPath = path }
+
+// Start seeds each venue's deposit cursor and runs the watch loop until ctx is
+// done. A venue with a PERSISTED cursor resumes from it (crediting deposits that
+// arrived while down); a venue with none skips its existing deposits (first run
+// must not re-credit history).
 func (h *Hub) Start(ctx context.Context) error {
 	h.initCursors(ctx)
+	h.saveCursors()
 	t := time.NewTicker(h.pollEvery)
 	defer t.Stop()
 	for {
@@ -155,17 +167,22 @@ func (h *Hub) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
-			h.poll(ctx)
+			if h.poll(ctx) {
+				h.saveCursors()
+			}
 		}
 	}
 }
 
-// initCursors advances each venue past its existing deposits without crediting,
-// so a restart doesn't re-credit historical payments. Note the symmetric gap: a
-// deposit that landed while the process was DOWN is also skipped (never credited)
-// — acceptable for a test bed; a durable per-venue cursor would close it.
+// initCursors seeds cursors from the durable store; venues not found there are
+// advanced past their existing deposits (so a first run doesn't credit history).
 func (h *Hub) initCursors(ctx context.Context) {
+	saved := h.loadCursors()
 	for _, v := range h.venues {
+		if c, ok := saved[v.id]; ok {
+			v.cursor = c
+			continue
+		}
 		pays, err := h.backend.Received(ctx, v.address, "")
 		if err != nil {
 			continue
@@ -176,8 +193,46 @@ func (h *Hub) initCursors(ctx context.Context) {
 	}
 }
 
+// loadCursors reads the persisted venue→cursor map (empty if no store / missing).
+func (h *Hub) loadCursors() map[string]string {
+	out := map[string]string{}
+	if h.cursorPath == "" {
+		return out
+	}
+	data, err := os.ReadFile(h.cursorPath)
+	if err != nil {
+		return out
+	}
+	_ = json.Unmarshal(data, &out)
+	return out
+}
+
+// saveCursors persists the current venue→cursor map (atomic temp+rename). Called
+// only from the single watch goroutine, so no lock is needed on the cursors.
+func (h *Hub) saveCursors() {
+	if h.cursorPath == "" {
+		return
+	}
+	m := make(map[string]string, len(h.venues))
+	for id, v := range h.venues {
+		m[id] = v.cursor
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := h.cursorPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("transfer: save cursors: %v", err)
+		return
+	}
+	_ = os.Rename(tmp, h.cursorPath)
+}
+
 // poll checks each venue's deposit address and credits newly-arrived funds.
-func (h *Hub) poll(ctx context.Context) {
+// It returns true if any cursor advanced (so the caller persists the cursors).
+func (h *Hub) poll(ctx context.Context) bool {
+	changed := false
 	for _, v := range h.venues {
 		pays, err := h.backend.Received(ctx, v.address, v.cursor)
 		if err != nil {
@@ -189,14 +244,17 @@ func (h *Hub) poll(ctx context.Context) {
 			if err != nil {
 				log.Printf("transfer: bad deposit amount %q on %s: %v", p.Amount, v.id, err)
 				v.cursor = p.Cursor
+				changed = true
 				continue
 			}
 			v.ledger.Credit(p.Asset, amt)
 			v.cursor = p.Cursor
+			changed = true
 			h.settle(p.TxRef)
 			log.Printf("transfer: credited %s %s to %s (tx %s)", p.Amount, p.Asset, v.id, p.TxRef)
 		}
 	}
+	return changed
 }
 
 func (h *Hub) settle(txRef string) {
