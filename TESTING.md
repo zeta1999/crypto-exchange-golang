@@ -43,7 +43,11 @@ go test ./internal/api/binance/... ./internal/api/coinbase/... ./internal/accoun
         ./internal/api/httpserver/... ./internal/transfer/... -count=1
 ```
 **Expected:** green. Covers signed REST/WS, the CCXT-style body-signed POST, exchangeInfo /
-products discovery, fill-report latency, the **Binance `@depth` incremental diff stream**
+products discovery, the **CR-5 OMS-parity surface** (place-time idempotency on
+`newClientOrderId` → duplicate place rejected -2010, never a 2nd resting order, incl. the
+concurrent-race test; **GET /api/v3/order** signed query by orderId/origClientOrderId across
+NEW→CANCELED; and the end-to-end acceptance flow place→GET→openOrders→duplicate-noop→cancel),
+fill-report latency, the **Binance `@depth` incremental diff stream**
 (depthUpdate deltas + monotonic U/u continuity, REST `lastUpdateId` sync), the **Coinbase fee
 fields** (total_fees/total_value_after_fees per side, product price_increment), the **Coinbase
 level2 incremental diffs** (snapshot-then-changed-levels, removals as new_quantity "0",
@@ -124,6 +128,41 @@ rm -f "$CUSTODY_KEYSTORE"; unset CUSTODY_PASSPHRASE CUSTODY_KEYSTORE
 ```
 **Expected:** two wallets listed (`xlm` G… and `eth` 0x…); keystore declares `argon2id`.
 Balance/faucet against live testnets is in EXTRA-TESTING.md.
+
+## 7. OMS-test preset boot smoke (CR-5, plain HTTP, no network)
+
+Boots the consumer-facing preset `configs/oms-test.yaml` **verbatim** (Binance edge on plain
+HTTP :8192, `emulator.enabled:false`, seeded balances, BTCUSDT↔BTC-USD) and drives the OMS
+acceptance flow with a signed client: place a LIMIT (echoed clientOrderId) → GET
+/api/v3/order by origClientOrderId → openOrders lists it → a duplicate place is rejected (no
+2nd order) → cancel by origClientOrderId.
+
+```sh
+go build -o /tmp/oms-exchange ./cmd/exchange
+EXCHANGE_CONFIG=configs/oms-test.yaml /tmp/oms-exchange >/tmp/oms-smoke.log 2>&1 &
+PID=$!; sleep 6
+sig() { printf '%s' "$1" | openssl dgst -sha256 -hmac "s" | sed 's/^.* //'; }
+B=http://localhost:8192; COID=smoke-1
+# place
+Q="symbol=BTCUSDT&side=BUY&type=LIMIT&timeInForce=GTC&quantity=0.01&price=100&newClientOrderId=$COID&timestamp=1700000000000"
+curl -s -H "X-MBX-APIKEY: k" -X POST "$B/api/v3/order?$Q&signature=$(sig "$Q")" | grep -q "\"clientOrderId\":\"$COID\"" && echo "OK place" || echo "FAIL place"
+# query by origClientOrderId
+Q="symbol=BTCUSDT&origClientOrderId=$COID&timestamp=1700000000000"
+curl -s -H "X-MBX-APIKEY: k" "$B/api/v3/order?$Q&signature=$(sig "$Q")" | grep -q '"status":"NEW"' && echo "OK query" || echo "FAIL query"
+# openOrders
+Q="symbol=BTCUSDT&timestamp=1700000000000"
+curl -s -H "X-MBX-APIKEY: k" "$B/api/v3/openOrders?$Q&signature=$(sig "$Q")" | grep -q "$COID" && echo "OK openOrders" || echo "FAIL openOrders"
+# duplicate place rejected
+Q="symbol=BTCUSDT&side=BUY&type=LIMIT&timeInForce=GTC&quantity=0.01&price=100&newClientOrderId=$COID&timestamp=1700000000000"
+curl -s -H "X-MBX-APIKEY: k" -X POST "$B/api/v3/order?$Q&signature=$(sig "$Q")" | grep -q '"code":-2010' && echo "OK duplicate-rejected" || echo "FAIL duplicate"
+# cancel by origClientOrderId
+Q="symbol=BTCUSDT&origClientOrderId=$COID&timestamp=1700000000000"
+curl -s -H "X-MBX-APIKEY: k" -X DELETE "$B/api/v3/order?$Q&signature=$(sig "$Q")" | grep -q '"status":"CANCELED"' && echo "OK cancel" || echo "FAIL cancel"
+kill $PID 2>/dev/null; rm -f /tmp/oms-exchange data/oms-test.wal
+```
+**Expected:** every line prints `OK …`. This is the same scenario asserted by the Go tests in
+§3 (`TestOMSFlow_Acceptance`, `TestPlaceOrder_Duplicate*`, `TestQueryOrder_*`); the boot smoke
+additionally proves the shipped preset is bootable verbatim on plain HTTP.
 
 ---
 

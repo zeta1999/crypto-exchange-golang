@@ -1,6 +1,7 @@
 package binance
 
 import (
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,6 +12,13 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
+
+// ErrDuplicateClientOrderID is returned by RecordUnique when the supplied
+// clientOrderID is already tracked (NEW, PARTIALLY_FILLED, or terminal). It is
+// the registry-level signal the place handler maps to Binance -2010 ("Duplicate
+// order sent."), enforcing place-time idempotency without ever creating a
+// second order.
+var ErrDuplicateClientOrderID = errors.New("duplicate clientOrderId")
 
 // enginePrefix tags engine order IDs that originate from the Binance edge, so
 // the registry's book hooks can recognise its own orders and ignore synthetic
@@ -83,6 +91,21 @@ func EngineID(orderID int64) string {
 // pointer into the registry; callers must not mutate it outside registry
 // methods).
 func (r *Registry) Record(binanceSym, engineSym, side, typ, tif string, price, qty decimal.Decimal, clientOrderID string) *orderRecord {
+	rec, _ := r.record(binanceSym, engineSym, side, typ, tif, price, qty, clientOrderID, false)
+	return rec
+}
+
+// RecordUnique is Record with place-time idempotency: if clientOrderID is
+// non-empty and already tracked, it allocates nothing and returns
+// ErrDuplicateClientOrderID. The check-and-insert is atomic under the registry
+// lock, so two concurrent places with the same id can never both succeed (only
+// the first creates a resting order). An empty clientOrderID is always unique
+// (one is generated), matching real Binance.
+func (r *Registry) RecordUnique(binanceSym, engineSym, side, typ, tif string, price, qty decimal.Decimal, clientOrderID string) (*orderRecord, error) {
+	return r.record(binanceSym, engineSym, side, typ, tif, price, qty, clientOrderID, true)
+}
+
+func (r *Registry) record(binanceSym, engineSym, side, typ, tif string, price, qty decimal.Decimal, clientOrderID string, unique bool) (*orderRecord, error) {
 	orderID := r.nextID()
 	engineID := EngineID(orderID)
 	if clientOrderID == "" {
@@ -105,11 +128,16 @@ func (r *Registry) Record(binanceSym, engineSym, side, typ, tif string, price, q
 		UpdateTime:    nowMs,
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if unique {
+		if _, exists := r.byClient[clientOrderID]; exists {
+			return nil, ErrDuplicateClientOrderID
+		}
+	}
 	r.byOrderID[orderID] = rec
 	r.byEngine[engineID] = rec
 	r.byClient[clientOrderID] = rec
-	r.mu.Unlock()
-	return rec
+	return rec, nil
 }
 
 // applyFill folds a filled quantity at a price into a record and recomputes its

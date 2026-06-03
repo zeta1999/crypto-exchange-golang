@@ -1,0 +1,67 @@
+# oms-test.yaml — OMS / trading-engine integration-test preset.
+#
+# A consumer (e.g. the Vivaldi trading engine) can boot this file verbatim and
+# point its Binance order-entry transport at http://localhost:8192. It is
+# deliberately deterministic and offline:
+#
+#   * emulator.enabled: false   -> a plain price-time matching engine, no live
+#                                  feed, no synthetic liquidity, no RTR/toxicity.
+#                                  The book only holds what the client places.
+#   * Binance edge on PLAIN HTTP (network.tls.cert_file/key_file empty) on a
+#     FIXED port :8192 — no certs to provision in CI.
+#   * seeded balances so signed LIMIT orders pass the lock-on-place check.
+#   * BTCUSDT (wire) <-> BTC-USD (engine) symbol map.
+#
+# Boot:  EXCHANGE_CONFIG=configs/oms-test.yaml go run ./cmd/exchange
+# Then the edge speaks the Binance /api/v3 subset on :8192:
+#   POST   /api/v3/order            place (idempotent on newClientOrderId)
+#   GET    /api/v3/order            query one order by orderId|origClientOrderId
+#   DELETE /api/v3/order            cancel by orderId|origClientOrderId
+#   GET    /api/v3/openOrders       list resting orders
+#   GET    /api/v3/account          live ledger balances
+#   GET    /api/v3/exchangeInfo|depth|ticker/price   (public)
+#
+# Credentials below are TEST values (api_key "k", secret "s") — sign with HMAC-
+# SHA256 over the query string, present the key in X-MBX-APIKEY.
+network:
+  listen_grpc: ":50091"
+  listen_http: ":8190"
+  listen_ws: ":8191"
+  token_secret: "oms-test-token"
+  tls:
+    cert_file: ""              # empty => plain HTTP on every edge (incl. Binance)
+    key_file: ""
+database:
+  dsn: "memory"
+limits:
+  max_open_orders: 5000
+  min_tick_size: 0.01
+instruments:
+  - symbol: "BTC-USD"
+    base: "BTC"
+    quote: "USD"
+storage:
+  wal_path: "data/oms-test.wal"
+api:
+  binance:
+    enabled: true
+    listen: ":8192"            # FIXED port — consumer points its transport here
+    api_key: "k"               # test credential sent in X-MBX-APIKEY
+    secret: "s"                # test HMAC-SHA256 signing secret
+    rate_per_sec: 0            # 0 => rate limiting disabled (no 429s in tests)
+    burst: 0
+    symbols:                   # Binance wire symbol -> engine instrument
+      - binance: "BTCUSDT"
+        engine: "BTC-USD"
+    balances:                  # seed the ledger so signed LIMIT orders can lock funds
+      USD: "1000000"
+      BTC: "10"
+  coinbase:
+    enabled: false
+metrics:
+  enabled: false
+# Plain matching engine: NO live feed, NO synthetic liquidity. Deterministic.
+emulator:
+  enabled: false
+transfer:
+  enabled: false

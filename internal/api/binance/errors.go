@@ -60,6 +60,12 @@ func errInsufficientBalance() *apiError {
 	return &apiError{Code: -2010, Msg: "Account has insufficient balance for requested action.", status: http.StatusBadRequest}
 }
 
+// errDuplicateOrder is Binance -2010 with the "Duplicate order sent." message,
+// returned when a place reuses a still-known newClientOrderId.
+func errDuplicateOrder() *apiError {
+	return &apiError{Code: -2010, Msg: "Duplicate order sent.", status: http.StatusBadRequest}
+}
+
 // errTooManyRequests is the Binance rate-limit error (-1003) with HTTP 429.
 func errTooManyRequests() *apiError {
 	return &apiError{Code: codeTooManyRequests, Msg: "Too many requests.", status: http.StatusTooManyRequests}

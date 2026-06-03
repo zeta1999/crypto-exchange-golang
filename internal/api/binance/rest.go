@@ -266,13 +266,16 @@ func tickerPrice(snap *orderbook.Snapshot) decimal.Decimal {
 
 // --- signed endpoints ---
 
-// handleOrder multiplexes POST (place) and DELETE (cancel) on /api/v3/order.
+// handleOrder multiplexes POST (place), DELETE (cancel), and GET (query) on
+// /api/v3/order.
 func (s *Server) handleOrder(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 		s.handlePlaceOrder(w, r)
 	case http.MethodDelete:
 		s.handleCancelOrder(w, r)
+	case http.MethodGet:
+		s.handleQueryOrder(w, r)
 	default:
 		writeError(w, errIllegalParam("method"))
 	}
@@ -387,6 +390,19 @@ func (s *Server) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Place-time idempotency on newClientOrderId. Real Binance rejects a place
+	// that reuses a clientOrderId still known to the system (-2010 "Duplicate
+	// order sent.") rather than silently creating a second order. RecordUnique
+	// claims the id atomically under the registry lock and rejects a duplicate
+	// before any fund reservation, so a repeated id can never create a second
+	// resting order. An empty newClientOrderId is always unique (one is
+	// generated), so this only guards explicitly-supplied ids.
+	rec, err := s.registry.RecordUnique(binSym, engSym, sideStr, typ, tif, price, qty, get("newClientOrderId"))
+	if err != nil {
+		writeError(w, errDuplicateOrder())
+		return
+	}
+
 	// Reserve funds for a resting LIMIT order (a MARKET order never rests, so it
 	// is settled from free balance on fill). buy locks quote (price*qty); sell
 	// locks base (qty). Insufficient free balance rejects the order (-2010).
@@ -400,12 +416,13 @@ func (s *Server) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 			lockAsset, lockAmt = base, qty
 		}
 		if !s.ledger.Lock(lockAsset, lockAmt) {
+			// Roll back the just-claimed record so a rejected place leaves no
+			// phantom order and frees the clientOrderId for a funded retry.
+			s.registry.Remove(rec.OrderID)
 			writeError(w, errInsufficientBalance())
 			return
 		}
 	}
-
-	rec := s.registry.Record(binSym, engSym, sideStr, typ, tif, price, qty, get("newClientOrderId"))
 
 	// Emit the NEW executionReport before placement so user-data subscribers see
 	// the order acknowledged ahead of any synchronous fill (TRADE) reports the
@@ -569,6 +586,104 @@ func canceledResponse(binSym string, rec orderRecord) canceledOrderResponse {
 		Type:                rec.Type,
 		Side:                rec.Side,
 	}
+}
+
+// queryOrderResponse is the GET /api/v3/order shape: the full current state of
+// a single order, looked up by orderId or origClientOrderId. It carries the
+// lifecycle status (NEW / PARTIALLY_FILLED / FILLED / CANCELED) and cumulative
+// execution (executedQty, cummulativeQuoteQty), so an OMS can reconcile an
+// order it placed earlier without replaying the user-data stream.
+type queryOrderResponse struct {
+	Symbol              string `json:"symbol"`
+	OrderID             int64  `json:"orderId"`
+	OrderListID         int64  `json:"orderListId"`
+	ClientOrderID       string `json:"clientOrderId"`
+	Price               string `json:"price"`
+	OrigQty             string `json:"origQty"`
+	ExecutedQty         string `json:"executedQty"`
+	CummulativeQuoteQty string `json:"cummulativeQuoteQty"`
+	Status              string `json:"status"`
+	TimeInForce         string `json:"timeInForce"`
+	Type                string `json:"type"`
+	Side                string `json:"side"`
+	StopPrice           string `json:"stopPrice"`
+	Time                int64  `json:"time"`
+	UpdateTime          int64  `json:"updateTime"`
+	IsWorking           bool   `json:"isWorking"`
+	OrigQuoteOrderQty   string `json:"origQuoteOrderQty"`
+}
+
+// handleQueryOrder: GET /api/v3/order (SIGNED) by orderId OR origClientOrderId.
+// Returns the order's current state regardless of status (open or terminal).
+func (s *Server) handleQueryOrder(w http.ResponseWriter, r *http.Request) {
+	if err := s.auth.Verify(r); err != nil {
+		writeError(w, err)
+		return
+	}
+	q := r.URL.Query()
+	binSym := q.Get("symbol")
+	if binSym == "" {
+		writeError(w, errMandatoryParam("symbol"))
+		return
+	}
+	if _, ok := s.symbols.ToEngine(binSym); !ok {
+		writeError(w, errInvalidSymbol())
+		return
+	}
+
+	var rec orderRecord
+	if idStr := q.Get("orderId"); idStr != "" {
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			writeError(w, errIllegalParam("orderId"))
+			return
+		}
+		got, ok := s.registry.snapshot(id)
+		if !ok {
+			writeError(w, errUnknownOrder())
+			return
+		}
+		rec = got
+	} else if coid := q.Get("origClientOrderId"); coid != "" {
+		got, ok := s.registry.GetByClientOrderID(coid)
+		if !ok {
+			writeError(w, errUnknownOrder())
+			return
+		}
+		rec, _ = s.registry.snapshot(got.OrderID)
+	} else {
+		// Binance requires exactly one of orderId / origClientOrderId.
+		writeError(w, errMandatoryParam("orderId"))
+		return
+	}
+
+	// Reported symbol must match the queried one (an order belongs to one
+	// market); a mismatch is treated as unknown, like Binance.
+	if rec.BinanceSymbol != binSym {
+		writeError(w, errUnknownOrder())
+		return
+	}
+
+	isWorking := rec.Status == statusNew || rec.Status == statusPartiallyFilled
+	writeJSON(w, queryOrderResponse{
+		Symbol:              rec.BinanceSymbol,
+		OrderID:             rec.OrderID,
+		OrderListID:         -1,
+		ClientOrderID:       rec.ClientOrderID,
+		Price:               rec.Price.StringPrec(pricePrec),
+		OrigQty:             rec.OrigQty.StringPrec(qtyPrec),
+		ExecutedQty:         rec.ExecutedQty.StringPrec(qtyPrec),
+		CummulativeQuoteQty: rec.CummulativeQuoteQty.StringPrec(pricePrec),
+		Status:              rec.Status,
+		TimeInForce:         rec.TimeInForce,
+		Type:                rec.Type,
+		Side:                rec.Side,
+		StopPrice:           "0.00000000",
+		Time:                rec.Time,
+		UpdateTime:          rec.UpdateTime,
+		IsWorking:           isWorking,
+		OrigQuoteOrderQty:   "0.00000000",
+	})
 }
 
 // openOrderResponse is one element of GET /api/v3/openOrders.

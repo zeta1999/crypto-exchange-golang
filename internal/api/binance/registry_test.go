@@ -31,6 +31,35 @@ func TestRegistry_RecordAndGet(t *testing.T) {
 	}
 }
 
+func TestRegistry_RecordUnique(t *testing.T) {
+	reg := newTestRegistry()
+	price, qty := decimal.MustParse("100"), decimal.MustParse("1")
+
+	// First claim of a non-empty id succeeds.
+	rec, err := reg.RecordUnique("BTCUSDT", "BTC-USD", "BUY", "LIMIT", "GTC", price, qty, "uid-1")
+	if err != nil || rec == nil {
+		t.Fatalf("first RecordUnique = %v,%v want ok", rec, err)
+	}
+
+	// Re-claiming the same id is rejected and allocates nothing.
+	dup, err := reg.RecordUnique("BTCUSDT", "BTC-USD", "BUY", "LIMIT", "GTC", price, qty, "uid-1")
+	if err != ErrDuplicateClientOrderID || dup != nil {
+		t.Fatalf("duplicate RecordUnique = %v,%v want ErrDuplicateClientOrderID", dup, err)
+	}
+	if len(reg.OpenOrders("")) != 1 {
+		t.Fatalf("open orders = %d want 1 (no phantom from duplicate)", len(reg.OpenOrders("")))
+	}
+
+	// An empty id is always unique (auto-generated), so a second empty-id place
+	// is fine.
+	if _, err := reg.RecordUnique("BTCUSDT", "BTC-USD", "BUY", "LIMIT", "GTC", price, qty, ""); err != nil {
+		t.Fatalf("empty id RecordUnique = %v want ok", err)
+	}
+	if _, err := reg.RecordUnique("BTCUSDT", "BTC-USD", "BUY", "LIMIT", "GTC", price, qty, ""); err != nil {
+		t.Fatalf("second empty id RecordUnique = %v want ok", err)
+	}
+}
+
 func TestRegistry_PartialThenFullFill(t *testing.T) {
 	reg := newTestRegistry()
 	rec := reg.Record("BTCUSDT", "BTC-USD", "BUY", "LIMIT", "GTC",

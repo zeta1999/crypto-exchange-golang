@@ -107,6 +107,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] /exchangeInfo (CCXT loadMarkets: symbols + PRICE_FILTER/LOT_SIZE/NOTIONAL); real balances still deferred
 - [x] latency injection applied at this edge (order_ack sync + fill_report async)
 - [x] conformance: ccxt-go v4 (endpoint-swapped) — PASS
+- [x] **CR-5** OMS parity: place-time idempotency on `newClientOrderId` (registry `RecordUnique`, atomic; duplicate → -2010 "Duplicate order sent.", never a 2nd resting order); **GET /api/v3/order** signed query by orderId|origClientOrderId (status/executedQty/cummulativeQuoteQty); `configs/oms-test.yaml` boot-verbatim preset (plain HTTP :8192, seeded balances, BTCUSDT↔BTC-USD, emulator off). Tests + acceptance flow; CI+race green.
 
 ## Phase 9 — Coinbase-compatible API
 - [x] `internal/api/coinbase/rest.go`: create/batch_cancel/list orders (historical), product_book, products/ticker, accounts (stub)

@@ -153,6 +153,25 @@ curl -sk -H "X-MBX-APIKEY: $KEY" -X POST "https://localhost:8082/api/v3/order?$Q
 > CI is a **local `./ci.sh`** script (not GitHub Actions). Run it before every commit.
 > Set `emulator.enabled: false` to run as a plain offline matching engine.
 
+### OMS / trading-engine integration tests
+
+For pointing an external OMS or trading engine at the Binance edge in automated tests, boot
+the ready-made preset verbatim — **plain HTTP** on a fixed port `:8192`, seeded balances,
+`BTCUSDT ↔ BTC-USD`, and `emulator.enabled: false` for a deterministic plain matching engine
+(no live feed, no synthetic liquidity):
+
+```bash
+EXCHANGE_CONFIG=configs/oms-test.yaml go run ./cmd/exchange
+# Binance edge: http://localhost:8192  (test creds: X-MBX-APIKEY "k", HMAC secret "s")
+```
+
+The edge serves the signed order lifecycle a consumer needs: **POST** `/api/v3/order`
+(place — **idempotent on `newClientOrderId`**: a duplicate id is rejected `-2010` "Duplicate
+order sent." and never creates a second resting order, like real Binance), **GET**
+`/api/v3/order` (query one order by `orderId` or `origClientOrderId` → current
+status/`executedQty`/`cummulativeQuoteQty`), **DELETE** `/api/v3/order` (cancel by either
+key), and **GET** `/api/v3/openOrders`. See TESTING.md §7 for a boot-and-drive smoke.
+
 ## Configuration
 
 Behavior is config-driven — retune without recompiling (`configs/dev.yaml`):
