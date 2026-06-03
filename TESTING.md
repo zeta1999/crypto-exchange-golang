@@ -96,14 +96,21 @@ emulator:
   rtr: { tau_ms: 0 }
   replay: { file: "testdata/feed/sample.jsonl", speed: 0.0 }
 YAML
-EXCHANGE_CONFIG=/tmp/test-smoke.yaml go run ./cmd/exchange >/tmp/test-smoke.log 2>&1 &
+# Build a real binary and run THAT (not `go run`), so $PID is the server itself
+# and the kill below actually reaps it — `kill` on a `go run` wrapper leaves the
+# compiled child holding the ports for the next run.
+go build -o /tmp/test-exchange ./cmd/exchange
+EXCHANGE_CONFIG=/tmp/test-smoke.yaml /tmp/test-exchange >/tmp/test-smoke.log 2>&1 &
 PID=$!; sleep 8
+grep -q "address already in use" /tmp/test-smoke.log && echo "FAIL boot (port in use — kill stale exchange procs)" || true
 curl -s "http://localhost:8192/api/v3/exchangeInfo" | grep -q '"symbol":"BTCUSDT"' && echo "OK exchangeInfo" || echo "FAIL exchangeInfo"
 curl -s "http://localhost:8192/api/v3/depth?symbol=BTCUSDT&limit=2" | grep -q '"bids"' && echo "OK depth" || echo "FAIL depth"
-kill $PID 2>/dev/null; rm -f /tmp/test-smoke.yaml data/test-smoke.wal
+kill $PID 2>/dev/null; rm -f /tmp/test-smoke.yaml /tmp/test-exchange data/test-smoke.wal
 ```
 **Expected:** the binary boots (emulator mirrors the replay trace), and both curls print
 `OK …`. (The book is seeded from `testdata/feed/sample.jsonl`; no live venue is contacted.)
+If you see `FAIL boot`, a previous run's process is still holding the ports — kill it
+(`pkill -f test-exchange` / `lsof -ti tcp:8192 | xargs kill`) and re-run.
 
 ## 6. Custody CLI smoke (wallet create + encrypted keystore, no network)
 

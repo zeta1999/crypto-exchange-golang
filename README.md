@@ -70,8 +70,8 @@ Purpose-built for technical and scenario testing of trading / OMS systems:
 
 | Surface | Shape | Status |
 |---------|-------|--------|
-| **Binance-compatible** | REST `/api/v3/*` (order, depth, ticker, openOrders, account) + WS (`@trade`, `@depth20`, user-data `executionReport` via listenKey) + HMAC-SHA256 signing | ✅ done |
-| **Coinbase-compatible** | Advanced Trade REST (orders, batch_cancel, product_book, ...) + WS (`level2`, `market_trades`, `user`) + CB-ACCESS HMAC | ✅ done |
+| **Binance-compatible** | REST `/api/v3/*` (order, depth, ticker, openOrders, account, withdraw) + WS (`@trade`, `@depth20` snapshot **& `@depth` incremental diffs** with `lastUpdateId` sync, user-data `executionReport` via listenKey) + HMAC-SHA256 signing | ✅ done |
+| **Coinbase-compatible** | Advanced Trade REST (orders, batch_cancel, product_book, products, accounts, withdraw; **fee fields** + `price_increment`) + WS (`level2` **true incremental diffs**, `market_trades`, `user`) + CB-ACCESS HMAC **& ES256 JWT** (CCXT-go conformance pass) | ✅ done |
 | **Native** | gRPC bidi-stream, HTTP REST, WebSocket | ✅ done |
 
 > Prices & quantities are exact **base-10 fixed-point decimals** (`pkg/decimal`, 18 digits,
@@ -93,8 +93,13 @@ Real-time order books and trades, vendored & normalized from the
 
 ### Custody examples (stretch, testnet only)
 
-Optional, off by default: deposit / balance / withdraw demos on **XLM** (Horizon testnet),
-**Solana** (devnet), and **ERC20** (Sepolia). Keys via env, never mainnet.
+Optional, off by default: a testnet wallet/faucet + on-chain **send & deposit-watch** toolkit on
+**XLM** (Horizon), **Solana** (devnet, SOL + USDC SPL), **EVM/ERC20** (Sepolia, ETH + USDC/USDT),
+and **BTC** (testnet). Keys are AES-256-GCM + Argon2id encrypted at rest (passphrase via env),
+testnet-only-guarded, never mainnet. An optional **transfer hub** rebalances inventory between the
+two venue ledgers: a withdrawal debits one venue, sends a real testnet tx from its custody hot
+wallet, and a deposit watcher auto-credits the destination (XLM live-verified; EVM/SOL/BTC signing
+vector-verified, live broadcast faucet-gated). **USDC auto-credit** works on XLM/EVM/Solana.
 
 ## Architecture
 

@@ -97,7 +97,12 @@ func (v *JWTVerifier) Verify(token string) error {
 		return fmt.Errorf("jwt: bad payload json: %w", err)
 	}
 	now := v.now()
-	if clm.Exp != 0 && now.After(time.Unix(clm.Exp, 0).Add(v.leeway)) {
+	// Require exp: a token without an expiry never bounds replay. Real Coinbase
+	// Advanced Trade JWTs always carry a short exp (typically nbf+120).
+	if clm.Exp == 0 {
+		return fmt.Errorf("jwt: missing exp claim")
+	}
+	if now.After(time.Unix(clm.Exp, 0).Add(v.leeway)) {
 		return fmt.Errorf("jwt: token expired")
 	}
 	if clm.Nbf != 0 && now.Add(v.leeway).Before(time.Unix(clm.Nbf, 0)) {

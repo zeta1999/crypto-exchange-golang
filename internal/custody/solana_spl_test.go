@@ -157,6 +157,41 @@ func TestReceived_SOL(t *testing.T) {
 	}
 }
 
+// TestReceived_BothAssets: a single tx that credits both USDC and native SOL
+// must yield two payments (one per asset), both carrying the tx as cursor.
+func TestReceived_BothAssets(t *testing.T) {
+	meta := map[string]any{
+		"preBalances":      []any{1_000_000_000},
+		"postBalances":     []any{3_000_000_000}, // +2 SOL
+		"preTokenBalances": []any{},
+		"postTokenBalances": []any{map[string]any{
+			"owner": "watched-addr", "mint": usdcSolanaMint,
+			"uiTokenAmount": map[string]any{"amount": "1500000"}, // +1.5 USDC
+		}},
+	}
+	ts := httptest.NewServer((&receivedRPC{meta: meta}).handler())
+	defer ts.Close()
+	s := &Solana{hc: http.DefaultClient, rpc: ts.URL}
+
+	pays, err := s.Received(context.Background(), "watched-addr", "")
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if len(pays) != 2 {
+		t.Fatalf("payments = %d, want 2 (USDC + SOL)", len(pays))
+	}
+	got := map[string]string{}
+	for _, p := range pays {
+		got[p.Asset] = p.Amount
+		if p.Cursor != "sig1" {
+			t.Fatalf("cursor = %q, want sig1", p.Cursor)
+		}
+	}
+	if got["USDC"] != "1.5" || got["SOL"] != "2" {
+		t.Fatalf("amounts = %+v, want USDC 1.5 + SOL 2", got)
+	}
+}
+
 func TestSendSPL_RecipientNoAccount(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(nil)
 	seed := priv.Seed()

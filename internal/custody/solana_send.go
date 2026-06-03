@@ -261,10 +261,12 @@ func (s *Solana) LatestCursor(ctx context.Context, address string) (string, erro
 }
 
 // Received reports incoming deposits since `cursor` (a tx signature). For each
-// newer signature it inspects the tx once, preferring a positive USDC (SPL)
-// token-balance delta, else a positive native-SOL delta. Each tx yields exactly
-// one Payment so the cursor advances atomically (no per-tx split that a crash
-// could half-apply); a send / fee-only tx yields a zero-amount payment that
+// newer signature it inspects the tx once and emits a payment for each asset
+// that increased: a positive USDC (SPL) token-balance delta and/or a positive
+// native-SOL delta (a tx can credit both — e.g. a token transfer that also
+// rent-funds the owner). All payments for a tx carry the same cursor (the tx
+// signature), so the cursor advances once per tx regardless of how many assets
+// it credited. A send / fee-only tx yields a single zero-amount payment that
 // only advances the cursor (Credit is a no-op on 0).
 func (s *Solana) Received(ctx context.Context, address, cursor string) ([]Payment, error) {
 	params := []any{address, map[string]any{"limit": 25}}
@@ -282,16 +284,22 @@ func (s *Solana) Received(ctx context.Context, address, cursor string) ([]Paymen
 	for i := len(sigs) - 1; i >= 0; i-- {
 		sig := sigs[i].Signature
 		sol, usdc, err := s.txDeltas(ctx, sig, address)
-		switch {
-		case err != nil:
+		if err != nil {
 			// Cannot inspect this tx: advance past it (zero-amount no-op credit)
 			// rather than wedging the watcher on one bad signature.
 			out = append(out, Payment{TxRef: sig, Asset: "SOL", Amount: "0", Cursor: sig})
-		case usdc > 0:
+			continue
+		}
+		emitted := false
+		if usdc > 0 {
 			out = append(out, Payment{TxRef: sig, Asset: "USDC", Amount: formatUnits(uint64(usdc), usdcSolanaDecimals), Cursor: sig})
-		case sol > 0:
+			emitted = true
+		}
+		if sol > 0 {
 			out = append(out, Payment{TxRef: sig, Asset: "SOL", Amount: formatUnits(uint64(sol), 9), Cursor: sig})
-		default:
+			emitted = true
+		}
+		if !emitted {
 			out = append(out, Payment{TxRef: sig, Asset: "SOL", Amount: "0", Cursor: sig})
 		}
 	}
