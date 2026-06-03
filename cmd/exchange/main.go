@@ -377,6 +377,8 @@ func transferBackend(chain string) transfer.Backend {
 		return custody.NewStellar()
 	case "eth":
 		return custody.NewEVM()
+	case "sol":
+		return custody.NewSolana()
 	default:
 		return nil
 	}
