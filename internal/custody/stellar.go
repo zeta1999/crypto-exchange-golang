@@ -106,6 +106,12 @@ func (s *Stellar) Balances(ctx context.Context, address string) ([]Balance, erro
 // XLM only; USDC is handled in a later phase. amount is ignored (friendbot
 // funds a fixed amount). Returns the funding tx hash.
 func (s *Stellar) Tap(ctx context.Context, address, asset string, amount float64) (string, error) {
+	if asset == "USDC" {
+		// USDC requires a trustline first (see PrepareAsset); then Circle drips it.
+		// The Circle Stellar-testnet blockchain id is unverified (no API key to
+		// test) — override with CIRCLE_XLM_BLOCKCHAIN if Circle rejects it.
+		return circleDrip(ctx, s.hc, envOr("CIRCLE_XLM_BLOCKCHAIN", "XLM-TESTNET"), address)
+	}
 	if asset != "" && asset != "XLM" {
 		return "", ErrUnsupportedAsset
 	}
@@ -132,7 +138,11 @@ func (s *Stellar) Tap(ctx context.Context, address, asset string, amount float64
 	return resp.ID, nil
 }
 
-// ManualURL: friendbot is automated, so XLM has no manual URL.
+// ManualURL: friendbot automates XLM; USDC falls back to Circle's web faucet
+// when no API key is configured.
 func (s *Stellar) ManualURL(asset string) (string, bool) {
+	if asset == "USDC" {
+		return circleManualURL, true
+	}
 	return "", false
 }

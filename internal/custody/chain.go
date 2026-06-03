@@ -45,6 +45,22 @@ type Faucet interface {
 	ManualURL(asset string) (url string, ok bool)
 }
 
+// TokenPreparer is an optional Chain capability: make an account able to HOLD a
+// non-native asset before it can receive it — e.g. establish a Stellar
+// trustline or a Solana associated token account. It needs the wallet secret
+// (it signs a transaction), so the CLI decrypts the secret for this step only.
+type TokenPreparer interface {
+	PrepareAsset(ctx context.Context, secret []byte, asset string) (ref string, err error)
+}
+
+// Known Circle USDC testnet asset identifiers (validated by the encoding tests).
+const (
+	// usdcStellarIssuer is Circle's USDC issuer account on the Stellar testnet.
+	usdcStellarIssuer = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+	// usdcSolanaMint is Circle's USDC mint on the Solana devnet.
+	usdcSolanaMint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+)
+
 var (
 	// ErrUnknownChain is returned by Registry.Get for an unregistered id.
 	ErrUnknownChain = errors.New("custody: unknown chain")

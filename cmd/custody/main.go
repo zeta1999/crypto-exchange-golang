@@ -35,10 +35,14 @@ commands:
   wallet new -chain <id> -name <name>   create + store an encrypted wallet
   wallet list                           list wallets
   wallet address -name <name>           print a wallet's deposit address
+  prepare -name <name> -asset <A>       enable holding a token (e.g. USDC trustline)
   faucet -name <name> [-asset A] [-amount F]   tap the testnet faucet
   balance -name <name> [-watch]         show balances (optionally poll)
 
 chains: xlm (Stellar testnet), sol (Solana devnet), eth (Ethereum Sepolia)
+USDC: on xlm, run "prepare -asset USDC" (establishes a trustline; fund XLM
+      first) before "faucet -asset USDC". Circle USDC drip needs CIRCLE_API_KEY;
+      without it, faucet prints the web faucet URL.
 
 env:
   CUSTODY_PASSPHRASE  (required) unlocks/creates the keystore
@@ -61,6 +65,8 @@ func main() {
 	switch os.Args[1] {
 	case "wallet":
 		err = cmdWallet(reg, os.Args[2:])
+	case "prepare":
+		err = cmdPrepare(reg, os.Args[2:])
 	case "faucet":
 		err = cmdFaucet(reg, os.Args[2:])
 	case "balance":
@@ -161,6 +167,48 @@ func cmdWallet(reg *custody.Registry, args []string) error {
 	}
 }
 
+func cmdPrepare(reg *custody.Registry, args []string) error {
+	fs := flag.NewFlagSet("prepare", flag.ExitOnError)
+	name := fs.String("name", "", "wallet name")
+	asset := fs.String("asset", "", "asset to enable (e.g. USDC)")
+	_ = fs.Parse(args)
+	if *name == "" || *asset == "" {
+		return errors.New("prepare requires -name and -asset")
+	}
+	ks, err := openKeystore()
+	if err != nil {
+		return err
+	}
+	chainID, _, secret, err := ks.Get(*name) // decrypt the secret only for signing
+	if err != nil {
+		return err
+	}
+	ch, err := reg.Get(chainID)
+	if err != nil {
+		return err
+	}
+	prep, ok := ch.(custody.TokenPreparer)
+	if !ok {
+		return fmt.Errorf("chain %s does not require asset preparation", chainID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	ref, err := prep.PrepareAsset(ctx, secret, *asset)
+	zero(secret) // best-effort wipe of the decrypted seed once signing is done
+	if err != nil {
+		return err
+	}
+	fmt.Printf("prepared %s for %s\n  ref: %s\n", *asset, *name, ref)
+	return nil
+}
+
+// zero overwrites a secret slice (best-effort; Go's GC may already have copied).
+func zero(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
 func cmdFaucet(reg *custody.Registry, args []string) error {
 	fs := flag.NewFlagSet("faucet", flag.ExitOnError)
 	name := fs.String("name", "", "wallet name")
@@ -189,13 +237,17 @@ func cmdFaucet(reg *custody.Registry, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	ref, err := f.Tap(ctx, addr, *asset, *amount)
-	if errors.Is(err, custody.ErrManualFaucet) {
+	if err != nil {
+		// On a manual faucet, OR any automated-faucet failure when a web faucet
+		// exists, point the user at the web faucet + their address.
 		if url, ok := f.ManualURL(*asset); ok {
-			fmt.Printf("manual faucet — visit:\n  %s\nfund address: %s\n", url, addr)
+			if errors.Is(err, custody.ErrManualFaucet) {
+				fmt.Printf("manual faucet — visit:\n  %s\nfund address: %s\n", url, addr)
+			} else {
+				fmt.Printf("automated faucet failed (%v)\ntry the web faucet:\n  %s\nfund address: %s\n", err, url, addr)
+			}
 			return nil
 		}
-	}
-	if err != nil {
 		return err
 	}
 	fmt.Printf("tapped %s for %s\n  ref: %s\n", chainID, addr, ref)

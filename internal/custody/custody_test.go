@@ -111,12 +111,17 @@ func TestStellarFaucetEmptyBodyErrors(t *testing.T) {
 }
 
 func TestSolanaAirdropBounds(t *testing.T) {
+	t.Setenv("CIRCLE_API_KEY", "")
 	s := NewSolana()
 	if _, err := s.Tap(context.Background(), "addr", "", 1000); err == nil {
 		t.Error("oversized airdrop should be rejected before any RPC call")
 	}
-	if _, err := s.Tap(context.Background(), "addr", "USDC", 1); err != ErrUnsupportedAsset {
-		t.Errorf("non-SOL asset err = %v, want ErrUnsupportedAsset", err)
+	// A truly unsupported asset is rejected; USDC routes to Circle (manual w/o key).
+	if _, err := s.Tap(context.Background(), "addr", "DOGE", 1); err != ErrUnsupportedAsset {
+		t.Errorf("unknown asset err = %v, want ErrUnsupportedAsset", err)
+	}
+	if _, err := s.Tap(context.Background(), "addr", "USDC", 0); err != ErrManualFaucet {
+		t.Errorf("USDC tap without key = %v, want ErrManualFaucet", err)
 	}
 }
 
