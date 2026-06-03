@@ -1,11 +1,13 @@
 package binance
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/account"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
+	"github.com/zeta1999/crypto-exchange-golang/internal/transfer"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
@@ -652,6 +654,68 @@ func ledgerBalances(l *account.Ledger) []Balance {
 		})
 	}
 	return out
+}
+
+// withdrawResponse mirrors POST /sapi/v1/capital/withdraw/apply.
+type withdrawResponse struct {
+	ID string `json:"id"`
+}
+
+// handleWithdraw: POST /sapi/v1/capital/withdraw/apply (SIGNED). Debits the
+// ledger and sends an on-chain testnet payment to `address` (the destination
+// venue's deposit address); returns the tx ref as the withdrawal id.
+func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, errIllegalParam("method"))
+		return
+	}
+	if s.withdraw == nil {
+		writeError(w, errInternal("withdrawals not enabled"))
+		return
+	}
+	if err := s.auth.Verify(r); err != nil {
+		writeError(w, err)
+		return
+	}
+	_ = r.ParseForm()
+	get := func(k string) string {
+		if v := r.URL.Query().Get(k); v != "" {
+			return v
+		}
+		return r.PostFormValue(k)
+	}
+	coin := get("coin")
+	address := get("address")
+	amtStr := get("amount")
+	if coin == "" {
+		writeError(w, errMandatoryParam("coin"))
+		return
+	}
+	if address == "" {
+		writeError(w, errMandatoryParam("address"))
+		return
+	}
+	amount, err := parseDecimalParam(amtStr, "amount")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if amount.Sign() <= 0 {
+		writeError(w, errIllegalParam("amount"))
+		return
+	}
+	ref, err := s.withdraw(r.Context(), coin, amount, address)
+	if err != nil {
+		// Only a genuine insufficient-balance maps to -2010; a send/chain failure
+		// surfaces its real reason (mislabelling it -2010 would mislead a bot).
+		if errors.Is(err, transfer.ErrInsufficient) {
+			writeError(w, errInsufficientBalance())
+		} else {
+			writeError(w, errInternal(err.Error()))
+		}
+		return
+	}
+	writeJSON(w, withdrawResponse{ID: ref})
 }
 
 // handleAccount: GET /api/v3/account (SIGNED).

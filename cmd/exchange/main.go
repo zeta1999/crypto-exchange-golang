@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -16,12 +17,14 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/grpcserver"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/httpserver"
 	wsadapter "github.com/zeta1999/crypto-exchange-golang/internal/api/ws"
+	"github.com/zeta1999/crypto-exchange-golang/internal/custody"
 	"github.com/zeta1999/crypto-exchange-golang/internal/emulator"
 	"github.com/zeta1999/crypto-exchange-golang/internal/engine"
 	"github.com/zeta1999/crypto-exchange-golang/internal/margin"
 	"github.com/zeta1999/crypto-exchange-golang/internal/metrics"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
+	"github.com/zeta1999/crypto-exchange-golang/internal/transfer"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/config"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
@@ -118,6 +121,34 @@ func main() {
 	uiFS := http.FS(os.DirFS("http/ui"))
 	httpSrv := httpserver.New(newMeteredEngine(eng, ordersPlaced, "native"), tokenValidator, wsHandler, uiFS)
 
+	// Account ledgers — shared between each API edge and the transfer hub so both
+	// see the same balances. Nil when the edge has no balances configured.
+	binanceLedger := buildLedger(cfg.API.Binance.Balances)
+	coinbaseLedger := buildLedger(cfg.API.Coinbase.Balances)
+
+	// Optional on-chain transfer flow: an arb bot withdraws from one venue and
+	// deposits to another, settled by a real testnet tx from each venue's custody
+	// hot wallet. Disabled unless configured. Built before the edges so their
+	// withdraw endpoints can route into it; the native POST /transfer is wired too.
+	var transferHub *transfer.Hub
+	if cfg.Transfer.Enabled {
+		transferHub = buildTransferHub(cfg.Transfer, map[string]*account.Ledger{
+			"binance":  binanceLedger,
+			"coinbase": coinbaseLedger,
+		})
+		if transferHub != nil {
+			group.Go(func() error { return transferHub.Start(ctx) })
+			httpSrv.SetTransfer(func(ctx context.Context, from, to, asset string, amount decimal.Decimal) (string, error) {
+				dest, ok := transferHub.Address(to)
+				if !ok {
+					return "", fmt.Errorf("unknown destination venue %q", to)
+				}
+				return transferHub.Withdraw(ctx, from, asset, amount, dest)
+			})
+			log.Printf("transfer flow enabled (on-chain via custody hot wallets)")
+		}
+	}
+
 	group.Go(func() error {
 		log.Printf("gRPC listening on %s", cfg.Network.ListenGRPC)
 		if err := grpcserver.ListenAndServe(ctx, cfg.Network.ListenGRPC, grpcSrv); err != nil {
@@ -179,8 +210,13 @@ func main() {
 		if bcfg.RatePerSec > 0 {
 			opts = append(opts, binance.WithRateLimiter(ratelimit.NewKeyedLimiter(bcfg.RatePerSec, bcfg.Burst, 0)))
 		}
-		if led := buildLedger(bcfg.Balances); led != nil {
-			opts = append(opts, binance.WithLedger(led))
+		if binanceLedger != nil {
+			opts = append(opts, binance.WithLedger(binanceLedger))
+		}
+		if transferHub != nil {
+			opts = append(opts, binance.WithWithdraw(func(ctx context.Context, asset string, amount decimal.Decimal, dest string) (string, error) {
+				return transferHub.Withdraw(ctx, "binance", asset, amount, dest)
+			}))
 		}
 		if apiAckDelay != nil {
 			opts = append(opts, binance.WithAckDelay(apiAckDelay))
@@ -218,8 +254,8 @@ func main() {
 		if ccfg.RatePerSec > 0 {
 			opts = append(opts, coinbase.WithRateLimiter(ratelimit.NewKeyedLimiter(ccfg.RatePerSec, ccfg.Burst, 0)))
 		}
-		if led := buildLedger(ccfg.Balances); led != nil {
-			opts = append(opts, coinbase.WithLedger(led))
+		if coinbaseLedger != nil {
+			opts = append(opts, coinbase.WithLedger(coinbaseLedger))
 		}
 		if apiAckDelay != nil {
 			opts = append(opts, coinbase.WithAckDelay(apiAckDelay))
@@ -261,6 +297,55 @@ func main() {
 	if err := group.Wait(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+// buildTransferHub opens the custody keystore, loads each venue's hot wallet,
+// and builds a Stellar-backed transfer hub. Returns nil (transfer disabled) on
+// any setup problem, logging why — a missing keystore must not crash the server.
+func buildTransferHub(cfg config.TransferConfig, ledgers map[string]*account.Ledger) *transfer.Hub {
+	path := cfg.KeystorePath
+	if path == "" {
+		path = "data/custody.keystore.json"
+	}
+	pass := os.Getenv("CUSTODY_PASSPHRASE")
+	if pass == "" {
+		log.Printf("transfer: CUSTODY_PASSPHRASE unset — transfer disabled")
+		return nil
+	}
+	ks, err := custody.Open(path, pass)
+	if err != nil {
+		log.Printf("transfer: open keystore %s: %v — transfer disabled", path, err)
+		return nil
+	}
+	defer ks.Destroy() // secrets are copied into the hub below; wipe the keystore key
+
+	poll := time.Duration(cfg.PollMs) * time.Millisecond
+	hub := transfer.NewHub(custody.NewStellar(), poll)
+	added := 0
+	for venueID, v := range cfg.Venues {
+		led := ledgers[venueID]
+		if led == nil {
+			log.Printf("transfer: venue %q has no balances ledger — skipped", venueID)
+			continue
+		}
+		chain, addr, secret, err := ks.Get(v.Wallet)
+		if err != nil {
+			log.Printf("transfer: wallet %q: %v — skipped", v.Wallet, err)
+			continue
+		}
+		if chain != "xlm" {
+			log.Printf("transfer: wallet %q chain %q unsupported (xlm only) — skipped", v.Wallet, chain)
+			continue
+		}
+		hub.AddVenue(venueID, led, secret, addr)
+		log.Printf("transfer: venue %q hot wallet %s", venueID, addr)
+		added++
+	}
+	if added < 1 {
+		log.Printf("transfer: no usable venues — transfer disabled")
+		return nil
+	}
+	return hub
 }
 
 // buildLedger constructs an account.Ledger from a config balances map (asset ->

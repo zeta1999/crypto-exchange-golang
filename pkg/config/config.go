@@ -43,14 +43,34 @@ type Database struct {
 }
 
 type Config struct {
-	Network     Network      `yaml:"network"`
-	Database    Database     `yaml:"database"`
-	Limits      Limits       `yaml:"limits"`
-	Instruments []Instrument `yaml:"instruments"`
-	Storage     Storage      `yaml:"storage"`
-	Emulator    Emulator     `yaml:"emulator"`
-	API         APIConfig    `yaml:"api"`
-	Metrics     Metrics      `yaml:"metrics"`
+	Network     Network        `yaml:"network"`
+	Database    Database       `yaml:"database"`
+	Limits      Limits         `yaml:"limits"`
+	Instruments []Instrument   `yaml:"instruments"`
+	Storage     Storage        `yaml:"storage"`
+	Emulator    Emulator       `yaml:"emulator"`
+	API         APIConfig      `yaml:"api"`
+	Metrics     Metrics        `yaml:"metrics"`
+	Transfer    TransferConfig `yaml:"transfer"`
+}
+
+// TransferConfig configures the on-chain transfer flow: an arb bot can withdraw
+// from one venue account and deposit to another, settled by a real testnet
+// transaction from each venue's custody hot wallet. Disabled by default; when
+// enabled it loads the per-venue hot wallets from the custody keystore
+// (CUSTODY_PASSPHRASE) and polls each venue's deposit address. Stellar (xlm)
+// only for now.
+type TransferConfig struct {
+	Enabled      bool                     `yaml:"enabled"`
+	KeystorePath string                   `yaml:"keystore_path"` // custody keystore (default data/custody.keystore.json)
+	PollMs       int                      `yaml:"poll_ms"`       // deposit poll interval (default 5000)
+	Venues       map[string]TransferVenue `yaml:"venues"`        // venue id ("binance"/"coinbase") -> hot wallet
+}
+
+// TransferVenue names the custody keystore wallet (chain xlm) that holds a
+// venue's on-chain hot funds and serves as its deposit address.
+type TransferVenue struct {
+	Wallet string `yaml:"wallet"`
 }
 
 // Metrics configures the Prometheus-text metrics endpoint. When Enabled, a

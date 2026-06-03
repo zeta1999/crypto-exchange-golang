@@ -19,11 +19,19 @@ type Engine interface {
 }
 
 // Server exposes JSON endpoints and static GUI assets.
+// TransferFunc moves `amount` of `asset` from venue `from` to venue `to`
+// (on-chain, via the transfer hub), returning the tx ref.
+type TransferFunc func(ctx context.Context, from, to, asset string, amount decimal.Decimal) (string, error)
+
 type Server struct {
 	engine    Engine
 	validator *auth.TokenValidator
 	mux       *http.ServeMux
+	transfer  TransferFunc // optional: POST /transfer (nil → 501)
 }
+
+// SetTransfer enables the native POST /transfer endpoint.
+func (s *Server) SetTransfer(fn TransferFunc) { s.transfer = fn }
 
 // Handler exposes the underlying mux for httptest servers.
 func (s *Server) Handler() http.Handler {
@@ -36,6 +44,7 @@ func New(engine Engine, validator *auth.TokenValidator, wsHandler http.Handler, 
 	srv := &Server{engine: engine, validator: validator, mux: mux}
 	mux.HandleFunc("/orders", srv.handleOrders)
 	mux.HandleFunc("/snapshot/", srv.handleSnapshot)
+	mux.HandleFunc("/transfer", srv.handleTransfer)
 	if wsHandler != nil {
 		mux.Handle("/ws", wsHandler)
 	}
@@ -115,6 +124,54 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 		"trades":   trades,
 		"snapshot": snap,
 	})
+}
+
+type transferRequest struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Asset  string `json:"asset"`
+	Amount string `json:"amount"` // decimal string
+	Token  string `json:"token"`
+}
+
+// handleTransfer: POST /transfer moves funds between venue accounts (on-chain).
+func (s *Server) handleTransfer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.transfer == nil {
+		http.Error(w, "transfers not enabled", http.StatusNotImplemented)
+		return
+	}
+	var req transferRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	token := tokenFromRequest(r)
+	if token == "" {
+		token = req.Token
+	}
+	if err := s.validator.Validate(token); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if req.From == "" || req.To == "" || req.Asset == "" {
+		http.Error(w, "from, to and asset are required", http.StatusBadRequest)
+		return
+	}
+	amount, err := decimal.Parse(req.Amount)
+	if err != nil {
+		http.Error(w, "invalid amount", http.StatusBadRequest)
+		return
+	}
+	ref, err := s.transfer(r.Context(), req.From, req.To, req.Asset, amount)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	respondJSON(w, map[string]string{"tx_ref": ref})
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {

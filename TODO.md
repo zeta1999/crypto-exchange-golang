@@ -127,7 +127,14 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] ETH/ERC20 on Sepolia (secp256k1/keccak EIP-55, eth_getBalance + balanceOf)
 - [x] Bitcoin testnet (secp256k1, hand-rolled bech32 P2WPKH `tb1`, Esplora balance)
 - [x] USDC faucet via Circle drip (`CIRCLE_API_KEY`) with web-faucet fallback; `cmd/custody` CLI; off by default, NOT wired into the server. Encoders validated against real on-chain vectors + live taps.
-- [ ] (deferred) wire custody balances into the exchange account endpoints; withdrawal/transfer signing beyond the trustline
+- [x] account balance ledger → live /account + /accounts (lock/settle on trade)
+- [x] **on-chain transfer flow** (`internal/transfer`): withdraw debits a venue ledger → real
+      testnet payment from its custody hot wallet → deposit watcher credits the destination
+      ledger. Binance `/sapi/.../withdraw/apply` + native `/transfer`. Live-verified on Stellar
+      testnet (XLM). Custody gained an on-chain `Sender` (Stellar Payment + deposit detection).
+- [ ] (follow-up) on-chain sends for Solana/EVM/BTC (per-chain tx builders); Coinbase native
+      withdraw endpoint; durable deposit cursor (persist across restart); USDC transfers
+      (trustline + Circle)
 
 ## Phase 11 — Hardening & observability
 - [x] Prometheus-text metrics (`internal/metrics`, dependency-free): orders/trades/cancels by edge, feed events, converge/RTR/tape/toxicity, per-instrument synthetic/anomalies/crossings/stale/VPIN/λ gauges; `:9090/metrics`

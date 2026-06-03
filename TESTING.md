@@ -39,12 +39,14 @@ replay speed pacing, RTR convergence, toxicity, the cross-venue `ArbHarness`
 ## 3. API edges (Binance + Coinbase) incl. account balance ledger
 
 ```sh
-go test ./internal/api/binance/... ./internal/api/coinbase/... ./internal/account/... -count=1
+go test ./internal/api/binance/... ./internal/api/coinbase/... ./internal/account/... \
+        ./internal/api/httpserver/... ./internal/transfer/... -count=1
 ```
 **Expected:** green. Covers signed REST/WS, the CCXT-style body-signed POST, exchangeInfo /
-products discovery, fill-report latency, and the **balance ledger** (lock-on-place,
-settle-on-fill with price-improvement refund, cancel-unlock, insufficient-balance rejection,
-and the underfunded-market no-mint guard).
+products discovery, fill-report latency, the **balance ledger** (lock-on-place, settle-on-fill
+with price-improvement refund, cancel-unlock, insufficient-balance rejection, underfunded-market
+no-mint guard), and the **transfer flow** (withdraw endpoint, native `/transfer`, hub
+debit→send→credit with the precision-quantize guard, fake-backend deposit watcher).
 
 ## 4. Custody toolkit (encoders, keystore, chains)
 

@@ -100,3 +100,18 @@ emulator:
   replay:                      # used only when venue: replay — run the whole emulator offline from a recorded trace
     file: ""                   # JSONL trace (cmd/feedcat -record output); required when venue=replay
     speed: 0.0                 # <=0 = as-fast-as-possible (deterministic); 1.0 = real time; 10.0 = 10x
+# On-chain transfer flow (PLAN Phase 10 follow-up): an external arb bot can move
+# inventory between the two venue accounts. A withdrawal debits the source
+# venue's ledger and sends a REAL testnet tx from its custody hot wallet to the
+# destination venue's deposit address; a watcher credits the destination ledger
+# when funds land. Testnet-only (Stellar/xlm for now). Disabled by default.
+# Requires CUSTODY_PASSPHRASE + a keystore with the named hot wallets (funded).
+# Exposed via POST /transfer (native, token auth) and Binance
+# /sapi/v1/capital/withdraw/apply (signed).
+transfer:
+  enabled: false
+  keystore_path: "data/custody.keystore.json"
+  poll_ms: 5000                # deposit poll interval
+  venues:
+    binance:  { wallet: "binance-hot" }   # custody keystore wallet (chain xlm)
+    coinbase: { wallet: "coinbase-hot" }

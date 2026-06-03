@@ -160,6 +160,32 @@ func (l *Ledger) debitFree(asset string, amt decimal.Decimal) {
 	h.free = h.free.Sub(amt)
 }
 
+// Debit removes amt of asset from free, returning false (and changing nothing)
+// if free is insufficient. Used by a withdrawal (funds leaving the venue).
+func (l *Ledger) Debit(asset string, amt decimal.Decimal) bool {
+	if amt.Sign() <= 0 {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	h := l.at(asset)
+	if h.free.Lt(amt) {
+		return false
+	}
+	h.free = h.free.Sub(amt)
+	return true
+}
+
+// Credit adds amt of asset to free. Used by a deposit (funds arriving).
+func (l *Ledger) Credit(asset string, amt decimal.Decimal) {
+	if amt.Sign() <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.at(asset).free = l.at(asset).free.Add(amt)
+}
+
 // Get returns the balance for one asset (zero if untracked).
 func (l *Ledger) Get(asset string) Balance {
 	l.mu.Lock()

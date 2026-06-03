@@ -39,6 +39,16 @@ type Server struct {
 	ackDelay    func() time.Duration
 	fillDelay   func() time.Duration
 	ledger      *account.Ledger // optional: real balances + lock/settle on trade
+	withdraw    WithdrawFunc    // optional: on-chain withdrawal (transfer hub)
+}
+
+// WithdrawFunc debits this venue's ledger and sends an on-chain payment of
+// `asset` to `destAddr`, returning the tx ref. Wired from the transfer hub.
+type WithdrawFunc func(ctx context.Context, asset string, amount decimal.Decimal, destAddr string) (string, error)
+
+// WithWithdraw enables POST /sapi/v1/capital/withdraw/apply.
+func WithWithdraw(fn WithdrawFunc) Option {
+	return func(s *Server) { s.withdraw = fn }
 }
 
 // WithLedger wires a balance ledger so /api/v3/account reports live balances and
@@ -147,6 +157,7 @@ func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Regis
 	s.mux.HandleFunc("/api/v3/order", s.handleOrder)
 	s.mux.HandleFunc("/api/v3/openOrders", s.handleOpenOrders)
 	s.mux.HandleFunc("/api/v3/account", s.handleAccount)
+	s.mux.HandleFunc("/sapi/v1/capital/withdraw/apply", s.handleWithdraw)
 
 	// listenKey lifecycle for the user-data stream (requires X-MBX-APIKEY, not a
 	// signature — matching Binance).

@@ -53,6 +53,30 @@ type TokenPreparer interface {
 	PrepareAsset(ctx context.Context, secret []byte, asset string) (ref string, err error)
 }
 
+// Sender is an optional Chain capability: sign and broadcast an on-chain payment
+// of `asset` from the wallet (`secret`) to `destAddr`. amount is a decimal
+// string in the asset's display units. Returns the tx hash/ref. Used by the
+// transfer flow to move funds between venue accounts on testnet.
+type Sender interface {
+	Send(ctx context.Context, secret []byte, asset, destAddr, amount string) (txRef string, err error)
+}
+
+// Watcher is an optional Chain capability: list incoming payments to an address
+// (for deposit detection), resuming after `cursor` (exclusive). The returned
+// Payments carry a Cursor to persist for the next poll.
+type Watcher interface {
+	Received(ctx context.Context, address, cursor string) ([]Payment, error)
+}
+
+// Payment is one incoming on-chain payment observed by a Watcher.
+type Payment struct {
+	TxRef  string // chain tx hash
+	From   string // sender address
+	Asset  string // "XLM", "USDC", …
+	Amount string // decimal string, display units
+	Cursor string // opaque paging token to resume after this payment
+}
+
 // Known Circle USDC testnet asset identifiers (validated by the encoding tests).
 const (
 	// usdcStellarIssuer is Circle's USDC issuer account on the Stellar testnet.
