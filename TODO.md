@@ -94,8 +94,9 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] Unmodified client (endpoint swap only); kept as a separate nested module so its dep tree
       stays out of the main module + CI.
 - [x] Conformance drive: place/cancel/query + read order book via the stock client.
-- [ ] (follow-up) Coinbase conformance via CCXT — needs picking the CCXT class matching the
-      auth scheme (modern `coinbase` = ES256 JWT; legacy `coinbaseadvanced` = HMAC).
+- [x] Coinbase conformance via CCXT — stock `ccxt.NewCoinbase` (Advanced Trade, ES256 JWT),
+      `go run . coinbase`. Surfaced + fixed the `brokerage/market/*` public path migration
+      (market/products + market/product_book aliases). Verified PASS; 401 on unsigned/tampered.
 
 ## Phase 8 — Binance-compatible API
 - [x] `internal/api/binance/rest.go`: order POST/DELETE, openOrders, depth, ticker, account (stub balances)
@@ -117,7 +118,8 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] /products list endpoint (CCXT loadMarkets: base/quote ids + increments + min size)
 - [x] latency injection applied at this edge (order_ack sync + fill_report async)
 - [ ] fee/precision fields, persisted terminal-order history — deferred
-- [ ] conformance via CCXT (endpoint-swapped) — follow-up (JWT vs HMAC class choice)
+- [x] conformance via CCXT (endpoint-swapped) — stock `ccxt.NewCoinbase` ES256-JWT lifecycle PASS
+      (`conformance/ccxt-go` coinbase mode); needed `brokerage/market/*` public-path aliases
 
 ## Phase 10 — Custody examples (stretch, testnet only) — DONE (toolkit)
 - [x] `internal/custody/chain.go`: `Chain`/`Faucet`/`TokenPreparer` interfaces + testnet-only `MustTestnet` guard
@@ -140,8 +142,8 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] persisted terminal-order history (Coinbase historical endpoint now returns FILLED/CANCELLED).
 - [~] USDC transfers — code path complete (Stellar CreditAsset / EVM ERC20); live needs a
       USDC-funded hot wallet (trustline + Circle key). See EXTRA-TESTING.md.
-- [ ] (follow-up) live ccxt-go Coinbase signed conformance (ES256 JWT); EVM/SOL/BTC live sends
-      (faucet-gated); Binance @depth incremental diffs; Coinbase fee fields.
+- [x] live ccxt-go Coinbase signed conformance (ES256 JWT) — PASS (`conformance/ccxt-go` coinbase mode)
+- [ ] (follow-up) EVM/SOL/BTC live sends (faucet-gated); Binance @depth incremental diffs; Coinbase fee fields.
 
 ## Phase 11 — Hardening & observability
 - [x] Prometheus-text metrics (`internal/metrics`, dependency-free): orders/trades/cancels by edge, feed events, converge/RTR/tape/toxicity, per-instrument synthetic/anomalies/crossings/stale/VPIN/λ gauges; `:9090/metrics`
