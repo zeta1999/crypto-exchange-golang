@@ -157,13 +157,15 @@ type EmulatorPriceShift struct {
 // EmulatorLatency configures artificial latency injection (PLAN §5 Phase 7).
 // All zero (the dev default) means no added delay anywhere. feed_to_book_ms
 // delays the reference goroutine (a slow feed); order_ack_ms / fill_report_ms
-// apply at the API edges (Phase 8/9). jitter_ms adds a uniform random
-// [0, jitter) on top of each base delay.
+// apply at the API edges (Phase 8/9). jitter_ms adds a stochastic component on
+// top of each base delay; distribution selects its shape: "uniform" (default,
+// [0, jitter)) or "poisson" (mean = jitter_ms, a bursty shifted-Poisson tail).
 type EmulatorLatency struct {
-	FeedToBookMs int `yaml:"feed_to_book_ms"`
-	OrderAckMs   int `yaml:"order_ack_ms"`
-	FillReportMs int `yaml:"fill_report_ms"`
-	JitterMs     int `yaml:"jitter_ms"`
+	FeedToBookMs int    `yaml:"feed_to_book_ms"`
+	OrderAckMs   int    `yaml:"order_ack_ms"`
+	FillReportMs int    `yaml:"fill_report_ms"`
+	JitterMs     int    `yaml:"jitter_ms"`
+	Distribution string `yaml:"distribution"` // "uniform" (default) | "poisson"
 }
 
 // EmulatorToxicity configures the adverse-selection model (PLAN [b]). Scale=0
@@ -285,6 +287,11 @@ func (c *Config) validateEmulator(engine map[string]bool, add func(string, ...in
 	if em.Latency.FeedToBookMs < 0 || em.Latency.OrderAckMs < 0 ||
 		em.Latency.FillReportMs < 0 || em.Latency.JitterMs < 0 {
 		add("emulator.latency.* must be >= 0")
+	}
+	switch em.Latency.Distribution {
+	case "", "uniform", "poisson":
+	default:
+		add("emulator.latency.distribution must be uniform or poisson")
 	}
 	tx := em.Toxicity
 	if tx.Scale < 0 {

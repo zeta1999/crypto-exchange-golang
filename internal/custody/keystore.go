@@ -15,17 +15,39 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/awnumar/memguard"
+	"golang.org/x/crypto/argon2"
 )
 
 // Keystore persistence constants.
 const (
-	keystoreVersion = 1
-	kdfName         = "pbkdf2-sha256"
-	pbkdf2Iters     = 600_000    // OWASP-style cost for PBKDF2-HMAC-SHA256
-	minIters        = 100_000    // reject downgraded KDF cost on open
-	maxIters        = 10_000_000 // DoS guard on a tampered/huge iters
-	saltLen         = 16
-	aesKeyLen       = 32 // AES-256
+	keystoreVersionV1 = 1 // legacy: PBKDF2-HMAC-SHA256 (read-only support)
+	keystoreVersion   = 2 // current: Argon2id
+	kdfPBKDF2         = "pbkdf2-sha256"
+	kdfArgon2         = "argon2id"
+
+	saltLen   = 16
+	aesKeyLen = 32 // AES-256
+
+	// Argon2id parameters. Threads=1 makes the derivation a single sequential
+	// lane — it cannot be sped up by parallel cores within one guess — and the
+	// 64 MiB memory cost forces each guess to use real memory, defeating the
+	// GPU/ASIC parallelism a non-memory-hard KDF (PBKDF2) would expose. This is
+	// the practical realisation of "slow + parallel power doesn't help".
+	argon2Time    = 4
+	argon2MemKiB  = 64 * 1024 // 64 MiB
+	argon2Threads = 1
+
+	// Bounds for KDF params read from the (untrusted) file.
+	argon2MinMemKiB = 16 * 1024
+	argon2MaxMemKiB = 1 << 20 // 1 GiB DoS guard
+	argon2MinTime   = 2
+	argon2MaxTime   = 64
+	pbkdf2Iters     = 600_000
+	minIters        = 100_000
+	maxIters        = 10_000_000
+
 	// checkPlaintext is encrypted under the derived key so opening with the
 	// wrong passphrase is detected immediately, even for an empty keystore.
 	checkPlaintext = "custody-keystore-v1"
@@ -46,21 +68,37 @@ type Entry struct {
 }
 
 type keystoreFile struct {
-	Version  int              `json:"version"`
-	KDF      string           `json:"kdf"`
-	Salt     string           `json:"salt"` // base64
-	Iters    int              `json:"iters"`
+	Version int    `json:"version"`
+	KDF     string `json:"kdf"`
+	Salt    string `json:"salt"` // base64
+	// Argon2id params (kdf == argon2id).
+	Memory  int `json:"memory,omitempty"`
+	Time    int `json:"time,omitempty"`
+	Threads int `json:"threads,omitempty"`
+	// PBKDF2 param (legacy v1 only).
+	Iters    int              `json:"iters,omitempty"`
 	Check    string           `json:"check"` // base64 nonce||ciphertext of checkPlaintext
 	Accounts map[string]Entry `json:"accounts"`
 }
 
 // Keystore is an AES-256-GCM-encrypted wallet store. The encryption key is
-// derived from a passphrase with PBKDF2-HMAC-SHA256 + a per-file random salt.
-// Secrets are encrypted at rest; addresses are stored in the clear.
+// derived from a passphrase with Argon2id (memory-hard, single sequential lane)
+// + a per-file random salt, and held in a memguard LockedBuffer — locked
+// memory with guard pages, wiped on Destroy. Secrets are encrypted at rest;
+// addresses are stored in the clear. Call Destroy when finished.
 type Keystore struct {
 	path string
-	key  []byte
+	key  *memguard.LockedBuffer
 	file keystoreFile
+}
+
+// Destroy wipes the in-memory derived key (locked memory). Safe to call more
+// than once. After Destroy the keystore can no longer encrypt/decrypt.
+func (ks *Keystore) Destroy() {
+	if ks != nil && ks.key != nil {
+		ks.key.Destroy()
+		ks.key = nil
+	}
 }
 
 // Open loads the keystore at path, deriving the key from passphrase and
@@ -82,36 +120,62 @@ func Open(path, passphrase string) (*Keystore, error) {
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return nil, fmt.Errorf("custody: parse keystore: %w", err)
 	}
-	if f.Version != keystoreVersion || f.KDF != kdfName {
-		return nil, fmt.Errorf("custody: unsupported keystore (version %d, kdf %q)", f.Version, f.KDF)
-	}
 	salt, err := base64.StdEncoding.DecodeString(f.Salt)
 	if err != nil {
 		return nil, fmt.Errorf("custody: bad salt: %w", err)
 	}
-	// The KDF params come from the file (attacker-controllable if the file is
-	// tampered). Reject implausible values: too few iters weakens an offline
-	// passphrase attack; too many is a DoS; a wrong salt length is corruption.
 	if len(salt) != saltLen {
 		return nil, fmt.Errorf("custody: bad salt length %d (want %d)", len(salt), saltLen)
 	}
-	if f.Iters < minIters || f.Iters > maxIters {
-		return nil, fmt.Errorf("custody: refusing keystore with implausible kdf iters %d", f.Iters)
-	}
-	key, err := pbkdf2.Key(sha256.New, passphrase, salt, f.Iters, aesKeyLen)
+	keyBuf, err := deriveKey(passphrase, salt, f)
 	if err != nil {
-		return nil, fmt.Errorf("custody: derive key: %w", err)
+		return nil, err
 	}
-	ks := &Keystore{path: path, key: key, file: f}
+	ks := &Keystore{path: path, key: keyBuf, file: f}
 	if ks.file.Accounts == nil {
 		ks.file.Accounts = make(map[string]Entry)
 	}
 	// Verify the passphrase via the check value.
 	got, err := ks.decryptCombined(f.Check)
 	if err != nil || subtle.ConstantTimeCompare(got, []byte(checkPlaintext)) != 1 {
+		ks.Destroy()
 		return nil, ErrBadPassphrase
 	}
 	return ks, nil
+}
+
+// deriveKey runs the file's KDF over the passphrase, returning the AES key in a
+// locked, guard-paged memguard buffer (the raw key slice is wiped). KDF params
+// come from the file, so they are validated: weak params (downgraded cost) and
+// absurd ones (DoS) are both rejected.
+func deriveKey(passphrase string, salt []byte, f keystoreFile) (*memguard.LockedBuffer, error) {
+	var key []byte
+	switch f.KDF {
+	case kdfArgon2:
+		if f.Memory < argon2MinMemKiB || f.Memory > argon2MaxMemKiB ||
+			f.Time < argon2MinTime || f.Time > argon2MaxTime ||
+			f.Threads < 1 || f.Threads > 16 {
+			return nil, fmt.Errorf("custody: refusing keystore with implausible argon2 params (m=%d t=%d p=%d)", f.Memory, f.Time, f.Threads)
+		}
+		key = argon2.IDKey([]byte(passphrase), salt, uint32(f.Time), uint32(f.Memory), uint8(f.Threads), aesKeyLen)
+	case kdfPBKDF2:
+		if f.Version != keystoreVersionV1 {
+			return nil, fmt.Errorf("custody: pbkdf2 only valid for v1 keystores")
+		}
+		if f.Iters < minIters || f.Iters > maxIters {
+			return nil, fmt.Errorf("custody: refusing keystore with implausible kdf iters %d", f.Iters)
+		}
+		k, err := pbkdf2.Key(sha256.New, passphrase, salt, f.Iters, aesKeyLen)
+		if err != nil {
+			return nil, fmt.Errorf("custody: derive key: %w", err)
+		}
+		key = k
+	default:
+		return nil, fmt.Errorf("custody: unsupported kdf %q (version %d)", f.KDF, f.Version)
+	}
+	buf := memguard.NewBufferFromBytes(key) // copies into locked memory + wipes key
+	buf.Freeze()                            // read-only (guard pages catch writes)
+	return buf, nil
 }
 
 func create(path, passphrase string) (*Keystore, error) {
@@ -119,27 +183,28 @@ func create(path, passphrase string) (*Keystore, error) {
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
 		return nil, fmt.Errorf("custody: salt: %w", err)
 	}
-	key, err := pbkdf2.Key(sha256.New, passphrase, salt, pbkdf2Iters, aesKeyLen)
+	f := keystoreFile{
+		Version:  keystoreVersion,
+		KDF:      kdfArgon2,
+		Salt:     base64.StdEncoding.EncodeToString(salt),
+		Memory:   argon2MemKiB,
+		Time:     argon2Time,
+		Threads:  argon2Threads,
+		Accounts: make(map[string]Entry),
+	}
+	keyBuf, err := deriveKey(passphrase, salt, f)
 	if err != nil {
-		return nil, fmt.Errorf("custody: derive key: %w", err)
+		return nil, err
 	}
-	ks := &Keystore{
-		path: path,
-		key:  key,
-		file: keystoreFile{
-			Version:  keystoreVersion,
-			KDF:      kdfName,
-			Salt:     base64.StdEncoding.EncodeToString(salt),
-			Iters:    pbkdf2Iters,
-			Accounts: make(map[string]Entry),
-		},
-	}
+	ks := &Keystore{path: path, key: keyBuf, file: f}
 	check, err := ks.encryptCombined([]byte(checkPlaintext))
 	if err != nil {
+		ks.Destroy()
 		return nil, err
 	}
 	ks.file.Check = check
 	if err := ks.persist(); err != nil {
+		ks.Destroy()
 		return nil, err
 	}
 	return ks, nil
@@ -213,7 +278,10 @@ func (ks *Keystore) Delete(name string) error {
 // --- crypto helpers ---
 
 func (ks *Keystore) gcm() (cipher.AEAD, error) {
-	block, err := aes.NewCipher(ks.key)
+	if ks.key == nil {
+		return nil, errors.New("custody: keystore is closed")
+	}
+	block, err := aes.NewCipher(ks.key.Bytes()) // key stays in locked memory
 	if err != nil {
 		return nil, err
 	}

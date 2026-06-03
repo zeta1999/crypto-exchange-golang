@@ -117,6 +117,7 @@ func cmdWallet(reg *custody.Registry, args []string) error {
 		if err != nil {
 			return err
 		}
+		defer ks.Destroy()
 		secret, err := ch.NewKey()
 		if err != nil {
 			return err
@@ -136,6 +137,7 @@ func cmdWallet(reg *custody.Registry, args []string) error {
 		if err != nil {
 			return err
 		}
+		defer ks.Destroy()
 		entries := ks.List()
 		if len(entries) == 0 {
 			fmt.Println("(no wallets)")
@@ -157,6 +159,7 @@ func cmdWallet(reg *custody.Registry, args []string) error {
 		if err != nil {
 			return err
 		}
+		defer ks.Destroy()
 		_, addr, ok := ks.Lookup(*name)
 		if !ok {
 			return fmt.Errorf("no wallet %q", *name)
@@ -181,6 +184,7 @@ func cmdPrepare(reg *custody.Registry, args []string) error {
 	if err != nil {
 		return err
 	}
+	defer ks.Destroy()
 	chainID, _, secret, err := ks.Get(*name) // decrypt the secret only for signing
 	if err != nil {
 		return err
@@ -224,6 +228,7 @@ func cmdFaucet(reg *custody.Registry, args []string) error {
 	if err != nil {
 		return err
 	}
+	defer ks.Destroy()
 	chainID, addr, ok := ks.Lookup(*name)
 	if !ok {
 		return fmt.Errorf("no wallet %q", *name)
@@ -268,6 +273,7 @@ func cmdBalance(reg *custody.Registry, args []string) error {
 	if err != nil {
 		return err
 	}
+	defer ks.Destroy()
 	chainID, addr, ok := ks.Lookup(*name)
 	if !ok {
 		return fmt.Errorf("no wallet %q", *name)

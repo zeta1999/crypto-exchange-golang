@@ -20,6 +20,7 @@ func TestKeystoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open new: %v", err)
 	}
+	defer ks.Destroy()
 	secret := []byte("a-32-byte-seed-aaaaaaaaaaaaaaaaa")
 	if err := ks.Put("alice", "xlm", "GADDR", secret); err != nil {
 		t.Fatalf("put: %v", err)
@@ -30,6 +31,7 @@ func TestKeystoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
+	defer ks2.Destroy()
 	chain, addr, got, err := ks2.Get("alice")
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -59,6 +61,7 @@ func TestKeystoreListAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ks.Destroy()
 	_ = ks.Put("b", "sol", "addrB", []byte("s2"))
 	_ = ks.Put("a", "xlm", "addrA", []byte("s1"))
 	list := ks.List()
@@ -76,23 +79,25 @@ func TestKeystoreListAndDelete(t *testing.T) {
 	}
 }
 
-// TestKeystoreRejectsTamperedIters ensures a downgraded KDF cost in the file is
-// refused on open (so an attacker can't cheapen an offline passphrase attack).
-func TestKeystoreRejectsTamperedIters(t *testing.T) {
+// TestKeystoreRejectsWeakKDF ensures a downgraded Argon2id memory cost in the
+// file is refused on open (so an attacker can't cheapen an offline attack).
+func TestKeystoreRejectsWeakKDF(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ks.json")
-	if _, err := Open(path, "pw"); err != nil {
+	ks, err := Open(path, "pw")
+	if err != nil {
 		t.Fatal(err)
 	}
+	ks.Destroy()
 	data := mustRead(t, path)
-	tampered := bytes.Replace(data, []byte(`"iters": 600000`), []byte(`"iters": 1`), 1)
+	tampered := bytes.Replace(data, []byte(`"memory": 65536`), []byte(`"memory": 1024`), 1)
 	if bytes.Equal(tampered, data) {
-		t.Fatal("test setup: iters field not found to tamper")
+		t.Fatal("test setup: memory field not found to tamper")
 	}
 	if err := os.WriteFile(path, tampered, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(path, "pw"); err == nil {
-		t.Fatal("Open must reject an implausibly low iters count")
+		t.Fatal("Open must reject a downgraded argon2 memory cost")
 	}
 }
 

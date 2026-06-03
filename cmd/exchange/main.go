@@ -150,6 +150,7 @@ func main() {
 			OrderAck:   time.Duration(cfg.Emulator.Latency.OrderAckMs) * time.Millisecond,
 			FillReport: time.Duration(cfg.Emulator.Latency.FillReportMs) * time.Millisecond,
 			Jitter:     time.Duration(cfg.Emulator.Latency.JitterMs) * time.Millisecond,
+			Dist:       emulator.ParseLatencyDist(cfg.Emulator.Latency.Distribution),
 		}, cfg.Emulator.Toxicity.Seed)
 		if cfg.Emulator.Latency.OrderAckMs > 0 {
 			apiAckDelay = edgeLat.OrderAckDelay

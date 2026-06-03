@@ -141,6 +141,7 @@ func startEmulator(ctx context.Context, group *errgroup.Group, cfg config.Emulat
 		OrderAck:   time.Duration(cfg.Latency.OrderAckMs) * time.Millisecond,
 		FillReport: time.Duration(cfg.Latency.FillReportMs) * time.Millisecond,
 		Jitter:     time.Duration(cfg.Latency.JitterMs) * time.Millisecond,
+		Dist:       emulator.ParseLatencyDist(cfg.Latency.Distribution),
 	}, cfg.Toxicity.Seed)
 	// TODO(phase7): apply OrderAck/FillReport at API edges (Phase 8/9).
 
