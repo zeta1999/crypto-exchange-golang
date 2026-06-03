@@ -38,6 +38,10 @@ api:
         engine: "BTC-USD"
       - binance: "ETHUSDT"
         engine: "ETH-USD"
+    balances:                  # seed the account ledger (asset -> free amount). When set,
+      USD: "1000000"           # /account reports live balances and LIMIT orders lock funds
+      BTC: "10"                # (rejected if insufficient) + settle on fill. Empty = stub.
+      ETH: "100"
   # Coinbase-Advanced-Trade-compatible REST edge (PLAN Phase 9 — a documented
   # SUBSET). When enabled, a client (CCXT in HMAC mode) pointed at `listen` with
   # only the base URL changed can place/cancel/query orders and read the product

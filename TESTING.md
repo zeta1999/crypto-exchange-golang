@@ -1,181 +1,113 @@
-# TESTING — Manual Test Plan
+# TESTING — Automated test plan
 
-Automated gate is `./ci.sh` (gofmt, vet, lint, build, race tests). This document covers
-**manual / scenario testing** run by a human (or a subagent) after each phase. Each phase
-section lists prerequisites, steps, and expected results. Record outcomes in `STATUS.md`.
+Every step here is **fully automated and offline** (no network, no manual judgement): a
+human or a subagent can run it top-to-bottom and each step either passes or fails on its
+own. It is the per-phase verification gate. Manual / network-dependent / not-easily-automatable
+checks (live feeds, live testnet faucets, live external-client conformance, metrics scrape)
+live in **[EXTRA-TESTING.md](EXTRA-TESTING.md)** and are optional.
 
-## Conventions
-- Run from repo root. Build: `go build ./...`.
-- Native dev node: `GOENV=dev go run ./cmd/exchange --config configs/dev.yaml`.
-- Use a recorded feed fixture (`testdata/feed/`) for deterministic runs where possible;
-  use live WS only for smoke checks (network-dependent).
-- "PASS" = expected result observed; note any deviation.
+Run from the repo root. The single command that must pass is `./ci.sh`; the targeted
+sections below let a reviewer confirm a specific subsystem in isolation.
 
----
+## 0. Full gate (the one that matters)
 
-## Phase 0 — Foundations
-**Steps**
-1. `./ci.sh` on a clean checkout.
-2. `make ci` (should call `ci.sh`).
+```sh
+./ci.sh
+```
+**Expected:** `CI PASSED`, exit 0 — gofmt clean, `go vet` clean, `go build ./...` ok,
+`go test ./... -race -count=1` all green. (Nested modules under `conformance/` are
+intentionally excluded.)
 
-**Expected**
-- CI runs all stages; exits 0 on the inherited skeleton.
-- No formatting diffs reported.
+## 1. Matching core + exact decimals
 
----
+```sh
+go test ./internal/orderbook/... ./internal/engine/... ./pkg/decimal/... -count=1
+```
+**Expected:** green. Decimal arithmetic is validated against a `math/big.Rat` oracle and is
+allocation-free.
 
-## Phase 1 — Feed ingestion
-**Prereq:** network access for live; or a recorded fixture for replay.
-**Steps**
-1. Live smoke: `go run ./cmd/feedcat --venue coinbase --symbol BTC-USD` for ~10s.
-2. Live smoke: `go run ./cmd/feedcat --venue binance --symbol BTCUSDT` for ~10s.
-3. Record: `go run ./cmd/feedcat --venue coinbase --symbol BTC-USD --record out.jsonl` (~30s).
-4. Replay: `go run ./cmd/feedcat --replay out.jsonl`.
+## 2. Emulator: determinism, replay, fault injection, arb, latency
 
-**Expected**
-- Trades stream with sane price/size/side; book best bid < best ask; spread positive.
-- Coinbase `level2` produces a populated book (the feature we added).
-- Replay reproduces the recorded sequence identically.
+```sh
+go test ./internal/emulator/... ./internal/feed/replay/... ./internal/toxicity/... -count=1
+```
+**Expected:** green. Covers the deterministic-clock golden test (byte-reproducible runs),
+replay speed pacing, RTR convergence, toxicity, the cross-venue `ArbHarness`
+(exploitable-then-closeable), and latency injection — uniform **and** shifted-Poisson
+(including the large-λ no-hang guard).
 
----
+## 3. API edges (Binance + Coinbase) incl. account balance ledger
 
-## Phase 2 — Reference book
-**Steps**
-1. Run feed → reference against a fixture; dump `Mid()`, `Spread()`, top 5 levels each side.
-2. Inject a known sequence gap in the fixture; observe resync/staleness behavior.
+```sh
+go test ./internal/api/binance/... ./internal/api/coinbase/... ./internal/account/... -count=1
+```
+**Expected:** green. Covers signed REST/WS, the CCXT-style body-signed POST, exchangeInfo /
+products discovery, fill-report latency, and the **balance ledger** (lock-on-place,
+settle-on-fill with price-improvement refund, cancel-unlock, insufficient-balance rejection,
+and the underfunded-market no-mint guard).
 
-**Expected**
-- Reference book matches the raw feed within tolerance at sampled timestamps.
-- Gap triggers resync (or staleness flag), no panic, recovers cleanly.
+## 4. Custody toolkit (encoders, keystore, chains)
 
----
+```sh
+go test ./internal/custody/... -count=1
+```
+**Expected:** green. StrKey/base58/bech32/EIP-55 validated against **real on-chain vectors**
+(Circle USDC issuer/mint, secp256k1 privkey=1, BIP-173); Argon2id+memguard keystore
+round-trip + wrong-passphrase + downgraded-KDF rejection; Circle/SPL/faucet guards (httptest,
+no network).
 
-## Phase 3 — Emulator seeding
-**Steps**
-1. Start node with `emulator.enabled: true`, `replay.mode: file`.
-2. With **no user orders**, query native snapshot (`GET /snapshot/BTC-USD`) repeatedly.
+## 5. Offline binary smoke (replay venue, plain HTTP, no network)
 
-**Expected**
-- Engine book mirrors reference: best bid/ask and depth track the feed each refresh.
-- Synthetic orders are tagged distinctly from user orders (visible in logs/WAL).
+A scriptable end-to-end boot with the emulator fed from the recorded trace and a balance
+ledger seeded. Writes a temp config, boots, curls, and tears down.
 
----
+```sh
+cat > /tmp/test-smoke.yaml <<'YAML'
+network: { listen_grpc: ":50091", listen_http: ":8190", listen_ws: ":8191", token_secret: "t", tls: { cert_file: "", key_file: "" } }
+database: { dsn: "memory" }
+limits: { max_open_orders: 5000, min_tick_size: 0.01 }
+instruments: [ { symbol: "BTC-USD", base: "BTC", quote: "USD" } ]
+storage: { wal_path: "data/test-smoke.wal" }
+api:
+  binance:
+    enabled: true
+    listen: ":8192"
+    api_key: "k"
+    secret: "s"
+    symbols: [ { binance: "BTCUSDT", engine: "BTC-USD" } ]
+    balances: { USD: "1000000", BTC: "10" }
+metrics: { enabled: false }
+emulator:
+  enabled: true
+  venue: "replay"
+  instruments: ["BTC-USD"]
+  reference: { depth_levels: 20, refresh_ms: 250 }
+  rtr: { tau_ms: 0 }
+  replay: { file: "testdata/feed/sample.jsonl", speed: 0.0 }
+YAML
+EXCHANGE_CONFIG=/tmp/test-smoke.yaml go run ./cmd/exchange >/tmp/test-smoke.log 2>&1 &
+PID=$!; sleep 8
+curl -s "http://localhost:8192/api/v3/exchangeInfo" | grep -q '"symbol":"BTCUSDT"' && echo "OK exchangeInfo" || echo "FAIL exchangeInfo"
+curl -s "http://localhost:8192/api/v3/depth?symbol=BTCUSDT&limit=2" | grep -q '"bids"' && echo "OK depth" || echo "FAIL depth"
+kill $PID 2>/dev/null; rm -f /tmp/test-smoke.yaml data/test-smoke.wal
+```
+**Expected:** the binary boots (emulator mirrors the replay trace), and both curls print
+`OK …`. (The book is seeded from `testdata/feed/sample.jsonl`; no live venue is contacted.)
 
-## Phase 4 — Return-to-Reference [a]
-**Steps**
-1. Seed book from fixture; freeze reference (pause replay).
-2. Submit a user market order that consumes 2–3 levels; snapshot immediately.
-3. Resume; snapshot every 500ms for `2*tau`.
+## 6. Custody CLI smoke (wallet create + encrypted keystore, no network)
 
-**Expected**
-- Immediately after the trade the book shows the dent.
-- Over ~`tau` the book converges back to reference; stale synthetics drained first.
-- Deterministic across two runs with the same seed.
-
----
-
-## Phase 5 — Trade replay sync
-**Steps**
-1. Place a resting user limit BUY just below current mid.
-2. Replay a session where the tape prints down through that price.
-
-**Expected**
-- The user limit fills at/around the tape time and price (not instantly, not never).
-- Fill price/size consistent with the printed trade; logged with tape correlation.
-
----
-
-## Phase 6 — Configurable toxicity [b]
-**Steps**
-1. Run scenario with `toxicity.scale: 0` — place resting user limits, replay session.
-2. Repeat with `toxicity.scale: 2.0` (over-weight), same seed/session.
-3. Compare adverse-fill counts and fill prices; check λ/VPIN logged gauges.
-
-**Expected**
-- `scale: 0` ⇒ behavior reduces to pure RTR (no extra adverse selection).
-- Higher scale ⇒ resting user limits get picked off more often and nearer unfavorable
-  prints; λ/VPIN values move with tape activity.
-- Results reproducible with fixed `seed`.
-
----
-
-## Phase 7 — Scenario & fault injection (test bed)
-**Prereq:** a recorded trace; emulator running on `replay.mode: file`.
-**Steps**
-1. **Trace replay determinism:** run the same trace + same `seed` twice; diff the resulting
-   fill logs / book snapshots.
-2. **Artificial latency:** set `latency.order_ack_ms: 50`, `fill_report_ms: 30`,
-   `jitter_ms: 10`; submit orders and timestamp ack/fill at the client.
-3. **Artificial price shift:** run two venues, apply `price_shift.offset_bps: 15` to one;
-   observe a cross-venue spread; run a toy arb taker and confirm it can lift the cheap side.
-4. **Zeroed controls:** set all latency=0, offset_bps=0, scale=1.0; confirm behavior matches
-   a no-injection run.
-5. **(If implemented) scenario script:** point `scenario.file` at a timeline; confirm events
-   fire at their scheduled offsets.
-
-**Expected**
-- Two seeded replays are bit-for-bit identical.
-- Measured ack/fill latency ≈ configured values (+ jitter band); ordering preserved.
-- The price-shifted venue exposes a closeable arbitrage; gap behaves per config.
-- Zeroed controls reduce to a clean (no-injection) run.
+```sh
+export CUSTODY_PASSPHRASE="testing"; export CUSTODY_KEYSTORE="/tmp/test-custody.json"; rm -f "$CUSTODY_KEYSTORE"
+go run ./cmd/custody wallet new -chain xlm -name a >/dev/null && \
+go run ./cmd/custody wallet new -chain eth -name b >/dev/null && \
+go run ./cmd/custody wallet list && \
+grep -q '"kdf": "argon2id"' "$CUSTODY_KEYSTORE" && echo "OK keystore argon2id" || echo "FAIL keystore"
+rm -f "$CUSTODY_KEYSTORE"; unset CUSTODY_PASSPHRASE CUSTODY_KEYSTORE
+```
+**Expected:** two wallets listed (`xlm` G… and `eth` 0x…); keystore declares `argon2id`.
+Balance/faucet against live testnets is in EXTRA-TESTING.md.
 
 ---
 
-## Phase 8 — Binance-compatible API
-**Prereq:** `api.binance.enabled: true`.
-**Steps**
-1. `GET /api/v3/depth?symbol=BTCUSDT` via curl.
-2. Signed `POST /api/v3/order` (LIMIT BUY) using a test HMAC key; then `DELETE`.
-3. `GET /api/v3/openOrders`, `GET /api/v3/account`.
-4. Connect a WS client to `@depth`/`@trade` and the user-data stream.
-
-**Expected**
-- Responses match Binance JSON shapes; signature check enforced.
-- Order appears in openOrders; cancel removes it; executionReport pushed on fill.
-- (Bonus) `python-binance` against the emulator base URL works for the above.
-
----
-
-## Phase 9 — Coinbase-compatible API
-**Prereq:** `api.coinbase.enabled: true`.
-**Steps**
-1. `GET` product book + ticker via curl.
-2. Signed create-order + cancel-order (JWT/HMAC).
-3. `GET` list orders.
-4. WS subscribe `level2`, `market_trades`, `user`.
-
-**Expected**
-- Responses match Advanced Trade shapes; auth enforced.
-- Order lifecycle reflected in list orders + user channel.
-
----
-
-## Phase 10 — Custody examples (stretch, testnet only)
-**Prereq:** custody flag on; testnet RPC endpoints + funded faucet keys in env.
-**Steps**
-1. Generate a deposit address (XLM / Solana / ERC20-Sepolia).
-2. Send a small testnet deposit; wait for confirmation.
-3. Verify balance credited; place a trade funded by it.
-4. Request a small withdrawal; confirm a testnet tx broadcasts.
-
-**Expected**
-- Deposit credits balance after confirmations; withdrawal produces a valid testnet txid.
-- No mainnet calls; keys never logged.
-
----
-
-## Phase 11 — Hardening & observability
-**Steps**
-1. Scrape `/metrics`; confirm book-deviation, λ/VPIN, fill, feed-lag, latency series exist.
-2. Run the scenario test suite (`go test ./... -run Scenario`).
-3. Feed a malformed config; confirm validation error (no panic).
-
-**Expected**
-- Metrics populated and sane; scenario goldens pass; bad config rejected clearly.
-
----
-
-## Regression smoke (run any time)
-1. `./ci.sh` green.
-2. Native node starts, places + cancels an order over HTTP, streams a snapshot over gRPC/WS.
-3. Emulator on a fixture runs 60s with no panics; book stays near reference.
+**Per-phase rule:** after a phase → `./ci.sh` → brutal-review subagent + fixes → a subagent
+runs THIS file end-to-end → iterate until CI passes and every step here reports OK.

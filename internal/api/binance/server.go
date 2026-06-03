@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zeta1999/crypto-exchange-golang/internal/account"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
@@ -37,6 +38,14 @@ type Server struct {
 	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
 	ackDelay    func() time.Duration
 	fillDelay   func() time.Duration
+	ledger      *account.Ledger // optional: real balances + lock/settle on trade
+}
+
+// WithLedger wires a balance ledger so /api/v3/account reports live balances and
+// LIMIT orders lock funds (rejected if insufficient) + settle on fill. When nil,
+// the edge falls back to the static WithBalances stub (legacy behaviour).
+func WithLedger(l *account.Ledger) Option {
+	return func(s *Server) { s.ledger = l }
 }
 
 // Balance is a Binance account balance entry. The engine has no ledger, so the
@@ -198,6 +207,58 @@ func (s *Server) AttachHooks(book *orderbook.OrderBook) {
 			}
 		}
 	})
+
+	// 3) Ledger hook: settle fills + release cancelled reservations into the
+	// balance ledger (runs after the registry hook, so order state is current).
+	if s.ledger != nil {
+		book.RegisterHook(func(evt string, data interface{}) {
+			switch evt {
+			case "trade":
+				if t, ok := data.(*orderbook.Trade); ok {
+					for _, id := range []string{t.BuyOrderID, t.SellOrderID} {
+						if isEdgeOrder(id) {
+							s.settleFill(id, id == t.BuyOrderID, t.Volume, t.Price)
+						}
+					}
+				}
+			case "cancel":
+				if o, ok := data.(*orderbook.Order); ok && isEdgeOrder(o.ID) {
+					s.unlockRemainder(o.ID)
+				}
+			}
+		})
+	}
+}
+
+// settleFill posts one fill to the ledger using the order's recorded side, type,
+// and instrument (base/quote). LIMIT orders settle against their reservation;
+// MARKET orders (Price==0) settle from free.
+func (s *Server) settleFill(engineID string, isBuy bool, qty, fillPrice decimal.Decimal) {
+	rec, ok := s.registry.getByEngine(engineID)
+	if !ok {
+		return
+	}
+	base, quote := splitEngineSymbol(rec.EngineSymbol)
+	s.ledger.SettleFill(isBuy, base, quote, qty, fillPrice, rec.Price)
+}
+
+// unlockRemainder releases the reservation still held by a cancelled LIMIT
+// order's unfilled remainder.
+func (s *Server) unlockRemainder(engineID string) {
+	rec, ok := s.registry.getByEngine(engineID)
+	if !ok || rec.Type != "LIMIT" {
+		return
+	}
+	remaining := rec.OrigQty.Sub(rec.ExecutedQty)
+	if remaining.Sign() <= 0 {
+		return
+	}
+	base, quote := splitEngineSymbol(rec.EngineSymbol)
+	if rec.Side == "BUY" {
+		s.ledger.Unlock(quote, remaining.Mul(rec.Price))
+	} else {
+		s.ledger.Unlock(base, remaining)
+	}
 }
 
 // isEdgeOrder reports whether an engine order id originates from the Binance

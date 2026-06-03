@@ -55,6 +55,11 @@ func errInternal(msg string) *apiError {
 	return &apiError{Code: codeUnknown, Msg: msg, status: http.StatusBadRequest}
 }
 
+// errInsufficientBalance is Binance -2010 (order rejected: not enough balance).
+func errInsufficientBalance() *apiError {
+	return &apiError{Code: -2010, Msg: "Account has insufficient balance for requested action.", status: http.StatusBadRequest}
+}
+
 // errTooManyRequests is the Binance rate-limit error (-1003) with HTTP 429.
 func errTooManyRequests() *apiError {
 	return &apiError{Code: codeTooManyRequests, Msg: "Too many requests.", status: http.StatusTooManyRequests}

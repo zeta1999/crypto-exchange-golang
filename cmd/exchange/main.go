@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zeta1999/crypto-exchange-golang/internal/account"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/binance"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/coinbase"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/grpcserver"
@@ -23,6 +24,7 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/config"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/wal"
 	"golang.org/x/sync/errgroup"
 )
@@ -175,6 +177,9 @@ func main() {
 		if bcfg.RatePerSec > 0 {
 			opts = append(opts, binance.WithRateLimiter(ratelimit.NewKeyedLimiter(bcfg.RatePerSec, bcfg.Burst, 0)))
 		}
+		if led := buildLedger(bcfg.Balances); led != nil {
+			opts = append(opts, binance.WithLedger(led))
+		}
 		if apiAckDelay != nil {
 			opts = append(opts, binance.WithAckDelay(apiAckDelay))
 		}
@@ -210,6 +215,9 @@ func main() {
 		opts := []coinbase.Option{coinbase.WithMetrics(coinbase.NewMetrics(reg))}
 		if ccfg.RatePerSec > 0 {
 			opts = append(opts, coinbase.WithRateLimiter(ratelimit.NewKeyedLimiter(ccfg.RatePerSec, ccfg.Burst, 0)))
+		}
+		if led := buildLedger(ccfg.Balances); led != nil {
+			opts = append(opts, coinbase.WithLedger(led))
 		}
 		if apiAckDelay != nil {
 			opts = append(opts, coinbase.WithAckDelay(apiAckDelay))
@@ -251,4 +259,22 @@ func main() {
 	if err := group.Wait(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+// buildLedger constructs an account.Ledger from a config balances map (asset ->
+// decimal-string free amount). Returns nil when no balances are configured, so
+// the edge keeps its legacy stub behaviour.
+func buildLedger(balances map[string]string) *account.Ledger {
+	if len(balances) == 0 {
+		return nil
+	}
+	initial := make(map[string]decimal.Decimal, len(balances))
+	for asset, amt := range balances {
+		v, err := decimal.Parse(amt)
+		if err != nil {
+			log.Fatalf("invalid balance for %s: %v", asset, err)
+		}
+		initial[asset] = v
+	}
+	return account.NewLedger(initial)
 }

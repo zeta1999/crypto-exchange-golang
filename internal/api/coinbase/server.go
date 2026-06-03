@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/zeta1999/crypto-exchange-golang/internal/account"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
 )
@@ -37,6 +38,14 @@ type Server struct {
 	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
 	ackDelay    func() time.Duration
 	fillDelay   func() time.Duration
+	ledger      *account.Ledger // optional: real balances + lock/settle on trade
+}
+
+// WithLedger wires a balance ledger so /accounts reports live balances and LIMIT
+// orders lock funds (rejected if insufficient) + settle on fill. When nil, the
+// edge falls back to the static WithAccounts stub (legacy behaviour).
+func WithLedger(l *account.Ledger) Option {
+	return func(s *Server) { s.ledger = l }
 }
 
 // nextTradeID synthesizes a monotonic trade_id for a market_trades frame (the
@@ -205,6 +214,47 @@ func (s *Server) AttachHooks(book *orderbook.OrderBook) {
 			}
 		}
 	})
+
+	// Ledger hook: settle fills + release cancelled reservations (runs after the
+	// registry hook, so order state is current).
+	if s.ledger != nil {
+		book.RegisterHook(func(evt string, data interface{}) {
+			switch evt {
+			case "trade":
+				if t, ok := data.(*orderbook.Trade); ok {
+					for _, id := range []string{t.BuyOrderID, t.SellOrderID} {
+						if rec, ok := s.registry.getByEngine(id); ok {
+							base, quote := splitProduct(rec.ProductID)
+							s.ledger.SettleFill(id == t.BuyOrderID, base, quote, t.Volume, t.Price, rec.Price)
+						}
+					}
+				}
+			case "cancel":
+				if o, ok := data.(*orderbook.Order); ok {
+					s.unlockRemainder(o.ID)
+				}
+			}
+		})
+	}
+}
+
+// unlockRemainder releases the reservation still held by a cancelled LIMIT
+// order's unfilled remainder.
+func (s *Server) unlockRemainder(engineID string) {
+	rec, ok := s.registry.getByEngine(engineID)
+	if !ok || rec.OrderType != "LIMIT" {
+		return
+	}
+	remaining := rec.OrigSize.Sub(rec.FilledSize)
+	if remaining.Sign() <= 0 {
+		return
+	}
+	base, quote := splitProduct(rec.ProductID)
+	if rec.Side == "BUY" {
+		s.ledger.Unlock(quote, remaining.Mul(rec.Price))
+	} else {
+		s.ledger.Unlock(base, remaining)
+	}
 }
 
 // ListenAndServe runs the edge with graceful shutdown, mirroring httpserver.

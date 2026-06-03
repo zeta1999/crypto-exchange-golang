@@ -79,6 +79,10 @@ type BinanceConfig struct {
 	Symbols    []SymbolPair `yaml:"symbols"`
 	RatePerSec float64      `yaml:"rate_per_sec"` // token-bucket refill; <=0 disables
 	Burst      int          `yaml:"burst"`        // bucket capacity
+	// Balances seeds the account ledger (asset -> free amount as a decimal
+	// string, e.g. {USD: "1000000", BTC: "10"}). When non-empty, /account
+	// reports live balances and LIMIT orders lock funds (rejected if short).
+	Balances map[string]string `yaml:"balances"`
 }
 
 // SymbolPair maps a Binance symbol ("BTCUSDT") to an engine instrument
@@ -107,6 +111,10 @@ type CoinbaseConfig struct {
 	Products     []string `yaml:"products"`
 	RatePerSec   float64  `yaml:"rate_per_sec"` // token-bucket refill; <=0 disables
 	Burst        int      `yaml:"burst"`        // bucket capacity
+	// Balances seeds the account ledger (asset -> free amount as a decimal
+	// string). When non-empty, /accounts reports live balances and LIMIT orders
+	// lock funds (rejected if short).
+	Balances map[string]string `yaml:"balances"`
 }
 
 // Emulator configures live-venue mirroring (feed → reference book → seeded

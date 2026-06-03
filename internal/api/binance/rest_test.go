@@ -31,7 +31,7 @@ type testHarness struct {
 	nowMs    int64
 }
 
-func newHarness(t *testing.T) *testHarness {
+func newHarness(t *testing.T, opts ...Option) *testHarness {
 	t.Helper()
 	nowMs := int64(1_700_000_000_000)
 	clock := func() time.Time { return time.UnixMilli(nowMs).UTC() }
@@ -41,7 +41,7 @@ func newHarness(t *testing.T) *testHarness {
 	symbols := newTestSymbolMap()
 	authn := NewAuthenticator(testAPIKey, testSecret, clock)
 	registry := NewRegistry(clock)
-	bsrv := New(eng, symbols, authn, registry, WithClock(clock))
+	bsrv := New(eng, symbols, authn, registry, append([]Option{WithClock(clock)}, opts...)...)
 	bsrv.AttachHooks(book)
 
 	ts := httptest.NewServer(bsrv.Handler())

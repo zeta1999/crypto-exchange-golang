@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zeta1999/crypto-exchange-golang/internal/account"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
@@ -389,6 +390,31 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reserve funds for a resting LIMIT order (MARKET settles from free on fill):
+	// buy locks quote (price*size), sell locks base (size). Insufficient balance
+	// rejects the order.
+	var lockAsset string
+	var lockAmt decimal.Decimal
+	if s.ledger != nil && !isMarket {
+		base, quote := splitProduct(req.ProductID)
+		if side == orderbook.SideBuy {
+			lockAsset, lockAmt = quote, price.Mul(size)
+		} else {
+			lockAsset, lockAmt = base, size
+		}
+		if !s.ledger.Lock(lockAsset, lockAmt) {
+			writeJSON(w, createOrderResponse{
+				Success: false,
+				ErrorResponse: &errorResponse{
+					Error:                 "INSUFFICIENT_FUND",
+					Message:               "Insufficient balance for order",
+					NewOrderFailureReason: "INSUFFICIENT_FUND",
+				},
+			})
+			return
+		}
+	}
+
 	rec := s.registry.Record(req.ProductID, req.Side, orderType, postOnly, price, size, req.ClientOrderID)
 
 	ord := &orderbook.Order{
@@ -411,6 +437,9 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		// inside PlaceLimit/PlaceMarket) isn't lost. Placement itself failed, so
 		// no trade fired — roll the record back to avoid a phantom OPEN order.
 		s.registry.Remove(rec.OrderID)
+		if s.ledger != nil {
+			s.ledger.Unlock(lockAsset, lockAmt) // release the reservation (no-op for MARKET)
+		}
 		writeJSON(w, createOrderResponse{
 			Success: false,
 			ErrorResponse: &errorResponse{
@@ -646,11 +675,34 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// Prefer live ledger balances; fall back to the static WithAccounts stub.
 	accounts := s.accounts
+	if s.ledger != nil {
+		accounts = ledgerAccounts(s.ledger)
+	}
 	if accounts == nil {
 		accounts = []Account{}
 	}
 	writeJSON(w, accountsResponse{Accounts: accounts, HasNext: false, Size: len(accounts)})
+}
+
+// ledgerAccounts renders the ledger snapshot as Coinbase account entries
+// (available_balance = free, hold = locked).
+func ledgerAccounts(l *account.Ledger) []Account {
+	snap := l.Snapshot()
+	out := make([]Account, 0, len(snap))
+	for _, b := range snap {
+		out = append(out, Account{
+			UUID:             "acct-" + b.Asset,
+			Name:             b.Asset + " Wallet",
+			Currency:         b.Asset,
+			AvailableBalance: Money{Value: b.Free.StringPrec(sizePrec), Currency: b.Asset},
+			Hold:             Money{Value: b.Locked.StringPrec(sizePrec), Currency: b.Asset},
+			Active:           true,
+			Type:             "ACCOUNT_TYPE_CRYPTO",
+		})
+	}
+	return out
 }
 
 // --- param helpers ---

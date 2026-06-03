@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/zeta1999/crypto-exchange-golang/internal/account"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
@@ -376,6 +377,24 @@ func (s *Server) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reserve funds for a resting LIMIT order (a MARKET order never rests, so it
+	// is settled from free balance on fill). buy locks quote (price*qty); sell
+	// locks base (qty). Insufficient free balance rejects the order (-2010).
+	var lockAsset string
+	var lockAmt decimal.Decimal
+	if s.ledger != nil && typ == "LIMIT" {
+		base, quote := splitEngineSymbol(engSym)
+		if side == orderbook.SideBuy {
+			lockAsset, lockAmt = quote, price.Mul(qty)
+		} else {
+			lockAsset, lockAmt = base, qty
+		}
+		if !s.ledger.Lock(lockAsset, lockAmt) {
+			writeError(w, errInsufficientBalance())
+			return
+		}
+	}
+
 	rec := s.registry.Record(binSym, engSym, sideStr, typ, tif, price, qty, get("newClientOrderId"))
 
 	// Emit the NEW executionReport before placement so user-data subscribers see
@@ -405,6 +424,9 @@ func (s *Server) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		// itself failed, no trade fired, so roll the record back — otherwise it
 		// lingers forever as a phantom NEW order in openOrders.
 		s.registry.Remove(rec.OrderID)
+		if s.ledger != nil {
+			s.ledger.Unlock(lockAsset, lockAmt) // release the reservation (no-op for MARKET)
+		}
 		writeError(w, errInternal(err.Error()))
 		return
 	}
@@ -618,6 +640,20 @@ type accountResponse struct {
 	Permissions      []string  `json:"permissions"`
 }
 
+// ledgerBalances renders the ledger snapshot as Binance balance entries.
+func ledgerBalances(l *account.Ledger) []Balance {
+	snap := l.Snapshot()
+	out := make([]Balance, 0, len(snap))
+	for _, b := range snap {
+		out = append(out, Balance{
+			Asset:  b.Asset,
+			Free:   b.Free.StringPrec(qtyPrec),
+			Locked: b.Locked.StringPrec(qtyPrec),
+		})
+	}
+	return out
+}
+
 // handleAccount: GET /api/v3/account (SIGNED).
 func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -628,7 +664,11 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// Prefer live ledger balances; fall back to the static WithBalances stub.
 	balances := s.balances
+	if s.ledger != nil {
+		balances = ledgerBalances(s.ledger)
+	}
 	if balances == nil {
 		balances = []Balance{}
 	}
