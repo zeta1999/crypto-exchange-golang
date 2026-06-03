@@ -208,11 +208,18 @@ func (r *Registry) Get(oid string) (*orderRecord, bool) {
 // OpenOrders returns OPEN orders, optionally filtered to a single product
 // (empty productID => all). Results are a stable copy sorted by order ID.
 func (r *Registry) OpenOrders(productID string) []orderRecord {
+	return r.OrdersByStatus(productID, statusOpen)
+}
+
+// OrdersByStatus returns retained order records filtered by product and status
+// (status "" = any). Terminal orders (FILLED/CANCELLED) stay in the registry,
+// so this backs the historical-orders endpoint. Results are a stable sorted copy.
+func (r *Registry) OrdersByStatus(productID, status string) []orderRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []orderRecord
 	for _, rec := range r.byOrderID {
-		if rec.Status != statusOpen {
+		if status != "" && rec.Status != status {
 			continue
 		}
 		if productID != "" && rec.ProductID != productID {

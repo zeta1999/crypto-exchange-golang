@@ -72,3 +72,20 @@ Move inventory between the two venue accounts on real testnet (Stellar only for 
 Expect: a real `tx_ref`; the log line `transfer: credited 100.0000000 XLM to coinbase` after the
 deposit poll; and on-chain `custody balance -name binance-hot` ≈ `9899.99999` (sent 100 + fee),
 `coinbase-hot` ≈ `10100`. Verified end-to-end on Stellar testnet.
+
+### Other chains / USDC
+The transfer hub picks its backend from the venues' wallet chain: **xlm** (Stellar, live-verified),
+**eth** (EVM/Sepolia, EIP-155-signing vector-verified), **sol** (Solana/devnet, serialization
+vector-verified), **btc** (Bitcoin/testnet, BIP-143-sighash vector-verified). For eth/sol/btc the
+hot wallets must hold testnet funds (Sepolia/devnet/testnet faucets — see the custody table above,
+mostly captcha/key-gated), then a `/transfer` or signed withdraw moves them on-chain the same way.
+**USDC** transfers work once a hot wallet holds USDC: on Stellar establish the trustline
+(`custody prepare`) + fund via Circle (`CIRCLE_API_KEY`), then `/transfer ... asset=USDC` (the
+Stellar `Send` routes USDC as a CreditAsset); on EVM, USDC/USDT move as ERC20 `transfer` calldata.
+
+### Coinbase CCXT conformance
+The Coinbase edge's public market-data endpoints (`/products`, `/product_book`) are
+CCXT-`loadMarkets`/`fetchOrderBook` compatible (same shape as the Binance harness in
+`conformance/ccxt-go`). Signed calls (createOrder/cancel) use **ES256 JWT** — configure
+`coinbase.jwt_public_key` and point `ccxt.NewCoinbase` (the Advanced Trade class) at the edge
+with a matching EC key. A full signed run is the live follow-up.

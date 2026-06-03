@@ -610,17 +610,10 @@ func (s *Server) handleHistoricalBatch(w http.ResponseWriter, r *http.Request) {
 		engSym = e
 	}
 
-	// This subset tracks OPEN orders in the registry; order_status filtering
-	// supports OPEN (the only queryable set without a terminal-order store).
-	status := q.Get("order_status")
-	if status != "" && status != statusOpen {
-		// Other statuses (FILLED/CANCELLED) aren't retained beyond OPEN in this
-		// subset; return an empty set rather than an error.
-		writeJSON(w, historicalBatchResponse{Orders: []orderView{}, HasNext: false})
-		return
-	}
-
-	records := s.registry.OpenOrders(engSym)
+	// Terminal orders (FILLED/CANCELLED) are retained in the registry, so
+	// order_status filters across the full history (OPEN/FILLED/CANCELLED);
+	// empty status returns all.
+	records := s.registry.OrdersByStatus(engSym, q.Get("order_status"))
 	out := make([]orderView, 0, len(records))
 	for _, rec := range records {
 		out = append(out, toOrderView(rec))

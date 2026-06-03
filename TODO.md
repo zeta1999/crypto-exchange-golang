@@ -132,9 +132,16 @@ fix → CI → manual TESTING subagent → iterate until clean.
       testnet payment from its custody hot wallet → deposit watcher credits the destination
       ledger. Binance `/sapi/.../withdraw/apply` + native `/transfer`. Live-verified on Stellar
       testnet (XLM). Custody gained an on-chain `Sender` (Stellar Payment + deposit detection).
-- [ ] (follow-up) on-chain sends for Solana/EVM/BTC (per-chain tx builders); Coinbase native
-      withdraw endpoint; durable deposit cursor (persist across restart); USDC transfers
-      (trustline + Circle)
+- [x] on-chain sends for **EVM/Solana/Bitcoin** (per-chain tx builders, each verified against a
+      canonical vector: EIP-155, Solana message serialization, BIP-143); the transfer hub picks
+      its backend by the venues' chain (xlm/eth/sol/btc).
+- [x] Coinbase native withdraw endpoint (`POST /api/v3/brokerage/withdraw` → transfer hub).
+- [x] durable deposit cursor (persist across restart, atomic write).
+- [x] persisted terminal-order history (Coinbase historical endpoint now returns FILLED/CANCELLED).
+- [~] USDC transfers — code path complete (Stellar CreditAsset / EVM ERC20); live needs a
+      USDC-funded hot wallet (trustline + Circle key). See EXTRA-TESTING.md.
+- [ ] (follow-up) live ccxt-go Coinbase signed conformance (ES256 JWT); EVM/SOL/BTC live sends
+      (faucet-gated); Binance @depth incremental diffs; Coinbase fee fields.
 
 ## Phase 11 — Hardening & observability
 - [x] Prometheus-text metrics (`internal/metrics`, dependency-free): orders/trades/cancels by edge, feed events, converge/RTR/tape/toxicity, per-instrument synthetic/anomalies/crossings/stale/VPIN/λ gauges; `:9090/metrics`
