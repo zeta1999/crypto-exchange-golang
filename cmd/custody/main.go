@@ -39,7 +39,8 @@ commands:
   faucet -name <name> [-asset A] [-amount F]   tap the testnet faucet
   balance -name <name> [-watch]         show balances (optionally poll)
 
-chains: xlm (Stellar testnet), sol (Solana devnet), eth (Ethereum Sepolia)
+chains: xlm (Stellar testnet), sol (Solana devnet), eth (Ethereum Sepolia),
+        btc (Bitcoin testnet)
 USDC: on xlm, run "prepare -asset USDC" (establishes a trustline; fund XLM
       first) before "faucet -asset USDC". Circle USDC drip needs CIRCLE_API_KEY;
       without it, faucet prints the web faucet URL.
@@ -60,6 +61,7 @@ func main() {
 	reg.Register(custody.NewStellar())
 	reg.Register(custody.NewSolana())
 	reg.Register(custody.NewEVM())
+	reg.Register(custody.NewBitcoin())
 
 	var err error
 	switch os.Args[1] {
