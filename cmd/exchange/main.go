@@ -257,6 +257,13 @@ func main() {
 		if coinbaseLedger != nil {
 			opts = append(opts, coinbase.WithLedger(coinbaseLedger))
 		}
+		if ccfg.FeeRate != "" {
+			rate, err := decimal.Parse(ccfg.FeeRate)
+			if err != nil {
+				log.Fatalf("coinbase fee_rate %q: %v", ccfg.FeeRate, err)
+			}
+			opts = append(opts, coinbase.WithFeeRate(rate))
+		}
 		if transferHub != nil {
 			opts = append(opts, coinbase.WithWithdraw(func(ctx context.Context, asset string, amount decimal.Decimal, dest string) (string, error) {
 				return transferHub.Withdraw(ctx, "coinbase", asset, amount, dest)

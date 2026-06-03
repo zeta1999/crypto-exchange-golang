@@ -131,6 +131,7 @@ type CoinbaseConfig struct {
 	Products     []string `yaml:"products"`
 	RatePerSec   float64  `yaml:"rate_per_sec"` // token-bucket refill; <=0 disables
 	Burst        int      `yaml:"burst"`        // bucket capacity
+	FeeRate      string   `yaml:"fee_rate"`     // fee fraction on filled value (e.g. "0.006"); empty => default
 	// Balances seeds the account ledger (asset -> free amount as a decimal
 	// string). When non-empty, /accounts reports live balances and LIMIT orders
 	// lock funds (rejected if short).

@@ -127,6 +127,7 @@ type productResponse struct {
 	BaseCur         string `json:"base_currency_id"`
 	BaseIncrement   string `json:"base_increment"`
 	QuoteIncrement  string `json:"quote_increment"`
+	PriceIncrement  string `json:"price_increment"`
 	BaseMinSize     string `json:"base_min_size"`
 	QuoteMinSize    string `json:"quote_min_size"`
 }
@@ -220,6 +221,7 @@ func newProductResponse(productID, price string) productResponse {
 		BaseCur:         base,
 		BaseIncrement:   stepStr(sizePrec),
 		QuoteIncrement:  stepStr(pricePrec),
+		PriceIncrement:  stepStr(pricePrec),
 		BaseMinSize:     stepStr(sizePrec),
 		QuoteMinSize:    "0",
 	}
@@ -555,13 +557,38 @@ type orderView struct {
 	FilledSize           string             `json:"filled_size"`
 	AverageFilledPrice   string             `json:"average_filled_price"`
 	FilledValue          string             `json:"filled_value"`
+	Fee                  string             `json:"fee"`
+	TotalFees            string             `json:"total_fees"`
+	TotalValueAfterFees  string             `json:"total_value_after_fees"`
+	SizeInclusiveOfFees  bool               `json:"size_inclusive_of_fees"`
 	CompletionPercentage string             `json:"completion_percentage"`
 	CreatedTime          string             `json:"created_time"`
 }
 
+// orderFees returns (total_fees, total_value_after_fees) for a record at the
+// given fee rate, as quote-precision strings. Fees apply to the filled quote
+// value; a BUY's all-in cost adds the fee, a SELL's net proceeds subtract it.
+func orderFees(rec orderRecord, rate decimal.Decimal) (totalFees, totalAfter string) {
+	fee := rec.FilledValue.Mul(rate)
+	after := rec.FilledValue
+	if rec.Side == "SELL" {
+		after = after.Sub(fee)
+	} else {
+		after = after.Add(fee)
+	}
+	return fee.StringPrec(pricePrec), after.StringPrec(pricePrec)
+}
+
 // toOrderView renders a record as a Coinbase order, reconstructing the
-// order_configuration from the stored fields.
-func toOrderView(rec orderRecord) orderView {
+// order_configuration from the stored fields and computing fees at the server's
+// fee rate.
+func (s *Server) toOrderView(rec orderRecord) orderView {
+	return toOrderViewRate(rec, s.effFeeRate())
+}
+
+// toOrderViewRate is the rate-parameterised core (kept separate so tests can
+// pin a rate without a Server).
+func toOrderViewRate(rec orderRecord, rate decimal.Decimal) orderView {
 	var cfg orderConfiguration
 	if rec.OrderType == "MARKET" {
 		cfg.MarketIOC = &marketIOCConfig{BaseSize: rec.OrigSize.StringPrec(sizePrec)}
@@ -572,6 +599,7 @@ func toOrderView(rec orderRecord) orderView {
 			PostOnly:   rec.PostOnly,
 		}
 	}
+	totalFees, totalAfter := orderFees(rec, rate)
 	return orderView{
 		OrderID:              rec.OrderID,
 		ClientOrderID:        rec.ClientOrderID,
@@ -582,6 +610,10 @@ func toOrderView(rec orderRecord) orderView {
 		FilledSize:           rec.FilledSize.StringPrec(sizePrec),
 		AverageFilledPrice:   rec.avgFilledPrice().StringPrec(pricePrec),
 		FilledValue:          rec.FilledValue.StringPrec(pricePrec),
+		Fee:                  totalFees,
+		TotalFees:            totalFees,
+		TotalValueAfterFees:  totalAfter,
+		SizeInclusiveOfFees:  false,
 		CompletionPercentage: rec.completionPercent().StringPrec(2),
 		CreatedTime:          time.UnixMilli(rec.CreatedMs).UTC().Format(time.RFC3339),
 	}
@@ -620,7 +652,7 @@ func (s *Server) handleHistoricalBatch(w http.ResponseWriter, r *http.Request) {
 	records := s.registry.OrdersByStatus(engSym, q.Get("order_status"))
 	out := make([]orderView, 0, len(records))
 	for _, rec := range records {
-		out = append(out, toOrderView(rec))
+		out = append(out, s.toOrderView(rec))
 	}
 	writeJSON(w, historicalBatchResponse{Orders: out, HasNext: false})
 }
@@ -650,7 +682,7 @@ func (s *Server) handleHistoricalOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &apiError{Err: errOrderNotFound, Msg: "order not found: " + oid, status: http.StatusNotFound})
 		return
 	}
-	writeJSON(w, singleOrderResponse{Order: toOrderView(rec)})
+	writeJSON(w, singleOrderResponse{Order: s.toOrderView(rec)})
 }
 
 // accountsResponse is a minimal GET .../accounts shape. Balances are a stub:

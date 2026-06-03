@@ -41,7 +41,8 @@ type streamKind int
 const (
 	kindUnknown streamKind = iota
 	kindTrade
-	kindDepth
+	kindDepth     // @depth20: partial-book snapshot push
+	kindDepthDiff // @depth: incremental depthUpdate diff stream
 )
 
 // parsedStream is a validated market stream: its original wire name, the engine
@@ -54,8 +55,9 @@ type parsedStream struct {
 }
 
 // parseStreamName validates a single stream name and resolves its symbol. It
-// accepts "<sym>@trade", "<sym>@depth20", and "<sym>@depth20@100ms". The symbol
-// is matched case-insensitively against the configured Binance symbols.
+// accepts "<sym>@trade", the partial-book "<sym>@depth20[@100ms]", and the
+// incremental diff "<sym>@depth[@100ms]". The symbol is matched
+// case-insensitively against the configured Binance symbols.
 func (s *Server) parseStreamName(name string) (parsedStream, bool) {
 	at := strings.IndexByte(name, '@')
 	if at <= 0 {
@@ -73,6 +75,8 @@ func (s *Server) parseStreamName(name string) (parsedStream, bool) {
 		ps.kind = kindTrade
 	case suffix == "depth20" || suffix == "depth20@100ms":
 		ps.kind = kindDepth
+	case suffix == "depth" || suffix == "depth@100ms":
+		ps.kind = kindDepthDiff
 	default:
 		return parsedStream{}, false
 	}
@@ -316,13 +320,18 @@ func (s *Server) Start(ctx context.Context) {
 func (s *Server) pushDepthTick() {
 	for _, name := range s.broadcaster.marketStreams() {
 		ps, ok := s.parseStreamName(name)
-		if !ok || ps.kind != kindDepth {
+		if !ok {
 			continue
 		}
 		if !s.broadcaster.hasMarketSubscribers(name) {
 			continue
 		}
-		s.broadcastDepth(ps)
+		switch ps.kind {
+		case kindDepth:
+			s.broadcastDepth(ps)
+		case kindDepthDiff:
+			s.broadcastDepthDiff(ps)
+		}
 	}
 }
 
@@ -333,6 +342,20 @@ type depthEvent struct {
 	LastUpdateID int64       `json:"lastUpdateId"`
 	Bids         [][2]string `json:"bids"`
 	Asks         [][2]string `json:"asks"`
+}
+
+// depthUpdateEvent is the @depth diff-stream payload (Binance "depthUpdate"):
+// only the levels that changed since the previous push, with the inclusive
+// update-id range U..u. A client buffers these after a REST /depth snapshot and
+// drops any event whose final id u <= the snapshot's lastUpdateId.
+type depthUpdateEvent struct {
+	EventType     string      `json:"e"` // "depthUpdate"
+	EventTime     int64       `json:"E"`
+	Symbol        string      `json:"s"` // upper-case Binance symbol, e.g. BTCUSDT
+	FirstUpdateID int64       `json:"U"`
+	FinalUpdateID int64       `json:"u"`
+	Bids          [][2]string `json:"b"`
+	Asks          [][2]string `json:"a"`
 }
 
 // tradeEvent is the @trade payload (Binance aggregate-of-fields subset).
@@ -381,6 +404,37 @@ func (s *Server) broadcastDepth(ps parsedStream) {
 		return
 	}
 	ev := s.depthPayload(snap)
+	s.fanout(ps.name, ev)
+}
+
+// broadcastDepthDiff computes the book delta since the last push and, when the
+// book changed, broadcasts a depthUpdate frame. A diff stream sends nothing on a
+// quiet tick (and nothing on the first tick, which silently seeds the baseline)
+// — clients get their starting book from REST /api/v3/depth.
+func (s *Server) broadcastDepthDiff(ps parsedStream) {
+	snap, err := s.engine.Snapshot(ps.engineSym)
+	if err != nil {
+		return
+	}
+	first, final, bids, asks, changed := s.depthDiffer.diff(ps.engineSym, snap)
+	if !changed {
+		return
+	}
+	if bids == nil {
+		bids = [][2]string{}
+	}
+	if asks == nil {
+		asks = [][2]string{}
+	}
+	ev := depthUpdateEvent{
+		EventType:     "depthUpdate",
+		EventTime:     s.now().UnixMilli(),
+		Symbol:        strings.ToUpper(ps.binSym),
+		FirstUpdateID: first,
+		FinalUpdateID: final,
+		Bids:          bids,
+		Asks:          asks,
+	}
 	s.fanout(ps.name, ev)
 }
 

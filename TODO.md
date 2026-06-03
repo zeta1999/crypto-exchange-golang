@@ -103,7 +103,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] HMAC-SHA256 signature emulation + timestamp/recvWindow (constant-time; -1022/-1021/-2014/-2015)
 - [x] symbol mapping (config BTCUSDT↔BTC-USD); registry w/ hook-driven fill tracking; wired behind config
 - [x] tests (23) + brutal review + fixes (panic guard, phantom-record rollback); live-verified signed order
-- [x] `internal/api/binance/ws.go`: market streams (@trade/@depth20) + user-data executionReport (listenKey)
+- [x] `internal/api/binance/ws.go`: market streams (@trade/@depth20 + **@depth incremental diffs**: depthUpdate U/u, REST lastUpdateId sync) + user-data executionReport (listenKey)
 - [x] /exchangeInfo (CCXT loadMarkets: symbols + PRICE_FILTER/LOT_SIZE/NOTIONAL); real balances still deferred
 - [x] latency injection applied at this edge (order_ack sync + fill_report async)
 - [x] conformance: ccxt-go v4 (endpoint-swapped) — PASS
@@ -117,7 +117,8 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] JWT/ES256 production auth (`jwt.go`: ECDSA P-256 verify, Bearer REST + WS jwt field; dependency-free; live-verified)
 - [x] /products list endpoint (CCXT loadMarkets: base/quote ids + increments + min size)
 - [x] latency injection applied at this edge (order_ack sync + fill_report async)
-- [ ] fee/precision fields, persisted terminal-order history — deferred
+- [x] fee/precision fields — orderView + WS userOrder `total_fees`/`total_value_after_fees`
+      (configurable `fee_rate`, default 0.6%), product `price_increment`; persisted terminal-order history (done earlier)
 - [x] conformance via CCXT (endpoint-swapped) — stock `ccxt.NewCoinbase` ES256-JWT lifecycle PASS
       (`conformance/ccxt-go` coinbase mode); needed `brokerage/market/*` public-path aliases
 
@@ -143,7 +144,10 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [~] USDC transfers — code path complete (Stellar CreditAsset / EVM ERC20); live needs a
       USDC-funded hot wallet (trustline + Circle key). See EXTRA-TESTING.md.
 - [x] live ccxt-go Coinbase signed conformance (ES256 JWT) — PASS (`conformance/ccxt-go` coinbase mode)
-- [ ] (follow-up) EVM/SOL/BTC live sends (faucet-gated); Binance @depth incremental diffs; Coinbase fee fields.
+- [x] Binance @depth incremental diffs; Coinbase fee fields; Solana **USDC SPL send** (TransferChecked,
+      vector + RPC-fake tested). EVM ERC20 + Stellar CreditAsset USDC sends already done.
+- [ ] (follow-up) live broadcast of EVM/SOL/BTC sends (faucet/captcha-gated, unverifiable offline);
+      Solana SPL **deposit-watch** auto-credit (send done; Stellar is the full-loop reference).
 
 ## Phase 11 — Hardening & observability
 - [x] Prometheus-text metrics (`internal/metrics`, dependency-free): orders/trades/cancels by edge, feed events, converge/RTR/tape/toxicity, per-instrument synthetic/anomalies/crossings/stale/VPIN/λ gauges; `:9090/metrics`

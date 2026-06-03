@@ -41,6 +41,29 @@ type Server struct {
 	fillDelay   func() time.Duration
 	ledger      *account.Ledger // optional: real balances + lock/settle on trade
 	withdraw    WithdrawFunc    // optional: on-chain withdrawal (transfer hub)
+	feeRate     decimal.Decimal // taker fee rate applied to filled value (0 => defaultFeeRate)
+}
+
+// defaultFeeRate is the fee fraction applied to an order's filled quote value
+// when none is configured (0.6%, a representative Advanced Trade taker tier).
+var defaultFeeRate = decimal.MustParse("0.006")
+
+// WithFeeRate sets the fee fraction (e.g. 0.006 = 0.6%) reported as total_fees
+// on filled orders. A non-positive rate falls back to defaultFeeRate.
+func WithFeeRate(rate decimal.Decimal) Option {
+	return func(s *Server) {
+		if rate.Sign() > 0 {
+			s.feeRate = rate
+		}
+	}
+}
+
+// effFeeRate returns the configured fee rate, or the default when unset.
+func (s *Server) effFeeRate() decimal.Decimal {
+	if s.feeRate.Sign() > 0 {
+		return s.feeRate
+	}
+	return defaultFeeRate
 }
 
 // WithdrawFunc debits this venue's ledger and sends an on-chain payment of

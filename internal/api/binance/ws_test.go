@@ -160,6 +160,53 @@ func TestWSDepth20WithInterval(t *testing.T) {
 	}
 }
 
+// TestWSDepthDiff drives the incremental @depth stream: no immediate snapshot
+// on subscribe (clients start from REST /depth), then depthUpdate frames as the
+// book changes, with monotonic U/u ids where each event's U == prev u + 1.
+func TestWSDepthDiff(t *testing.T) {
+	h := newWSHarness(t)
+	mustAdd(t, h.book, "seed-bid", orderbook.SideBuy, "100", "5")
+
+	c := h.dial(t, "/ws/btcusdt@depth")
+
+	// Let a depth tick fire and silently seed the baseline ({100:5}) BEFORE we
+	// mutate, so each later add is a single, deterministic delta.
+	time.Sleep(3 * depthInterval)
+
+	// After the baseline is seeded the book is static, so each brand-new level
+	// produces exactly one depthUpdate on the next tick.
+	read := func(price string) depthUpdateEvent {
+		t.Helper()
+		mustAdd(t, h.book, "lvl-"+price, orderbook.SideBuy, price, "1")
+		var ev depthUpdateEvent
+		readJSON(t, c, &ev)
+		return ev
+	}
+
+	ev1 := read("99")
+	if ev1.EventType != "depthUpdate" || ev1.Symbol != "BTCUSDT" {
+		t.Fatalf("event = %+v, want depthUpdate/BTCUSDT", ev1)
+	}
+	if ev1.FinalUpdateID == 0 || ev1.FirstUpdateID != ev1.FinalUpdateID {
+		t.Fatalf("U/u = %d/%d, want equal non-zero", ev1.FirstUpdateID, ev1.FinalUpdateID)
+	}
+	if len(ev1.Bids) == 0 && len(ev1.Asks) == 0 {
+		t.Fatalf("diff carried no changed levels: %+v", ev1)
+	}
+	// Bids/Asks must always be present (possibly empty arrays, never null).
+	if ev1.Bids == nil || ev1.Asks == nil {
+		t.Fatalf("b/a must be non-null arrays: %+v", ev1)
+	}
+
+	ev2 := read("98")
+	if ev2.FirstUpdateID != ev1.FinalUpdateID+1 {
+		t.Fatalf("U continuity broken: ev2.U=%d, want ev1.u+1=%d", ev2.FirstUpdateID, ev1.FinalUpdateID+1)
+	}
+	if ev2.FinalUpdateID < ev2.FirstUpdateID {
+		t.Fatalf("u < U: %d < %d", ev2.FinalUpdateID, ev2.FirstUpdateID)
+	}
+}
+
 func TestWSUnknownStreamRejected(t *testing.T) {
 	h := newWSHarness(t)
 	_, resp, err := websocket.DefaultDialer.Dial(h.wsURL("/ws/dogeusdt@trade"), nil)

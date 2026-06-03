@@ -33,6 +33,7 @@ type Server struct {
 	balances    []Balance
 	broadcaster *Broadcaster
 	listenKeys  *listenKeyManager
+	depthDiffer *depthDiffer
 	limiter     *ratelimit.KeyedLimiter
 	metrics     *Metrics
 	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
@@ -144,6 +145,7 @@ func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Regis
 	}
 	s.broadcaster = NewBroadcaster()
 	s.listenKeys = newListenKeyManager(s.now)
+	s.depthDiffer = newDepthDiffer(s.now)
 
 	// Public (unsigned) endpoints.
 	s.mux.HandleFunc("/api/v3/ping", s.handlePing)

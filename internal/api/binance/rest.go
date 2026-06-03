@@ -179,13 +179,21 @@ func (s *Server) handleDepth(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = v
 	}
+	// Read the diff-stream update id BEFORE the book snapshot. If a depth tick
+	// fires between the two, lastUpdateId then trails the snapshot's book
+	// version, so the client over-buffers diffs (re-applying ones already in the
+	// snapshot) rather than dropping the one it needs. depthUpdate levels are
+	// absolute quantities, so re-applying a level is idempotent — over-buffering
+	// is safe; the reverse ordering (id after snapshot) could drop a delta and
+	// permanently desync the client.
+	lastUpdateID := s.depthDiffer.current(engSym)
 	snap, err := s.engine.Snapshot(engSym)
 	if err != nil {
 		writeError(w, errInvalidSymbol())
 		return
 	}
 	resp := depthResponse{
-		LastUpdateID: s.now().UnixMilli(),
+		LastUpdateID: lastUpdateID,
 		Bids:         levelsToPairs(snap.Bids, limit),
 		Asks:         levelsToPairs(snap.Asks, limit),
 	}

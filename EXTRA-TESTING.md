@@ -48,6 +48,29 @@ return **401** while the ccxt-signed calls succeed. ccxt-go (>= v4.5) discovers 
 `brokerage/market/products` + `brokerage/market/product_book` paths (aliased to the legacy
 routes — see `TestMarketAliasRoutes`).
 
+## Binance `@depth` incremental diff stream (network: localhost)
+With the Binance edge enabled, the diff stream emits `depthUpdate` deltas (vs the `@depth20`
+partial-book snapshots). Sync like a real client: take the REST snapshot, then apply diffs.
+```sh
+# REST snapshot id (full book — do NOT use a small limit with @depth):
+curl -s "http://localhost:8192/api/v3/depth?symbol=BTCUSDT" | grep -o '"lastUpdateId":[0-9]*'
+# Stream diffs (e.g. wscat / websocat):
+websocat "ws://localhost:8192/ws/btcusdt@depth"
+```
+Expect `{"e":"depthUpdate","s":"BTCUSDT","U":..,"u":..,"b":[...],"a":[...]}` with each event's
+`U == previous u + 1`, and `u > lastUpdateId` for the first applicable event (removed levels
+carry qty `"0"`). Automated coverage: `TestDepthDiffer`, `TestWSDepthDiff`.
+
+## Solana USDC (SPL) on-chain send (network: devnet, faucet-gated)
+`custody.Solana.Send(..., "USDC", dest, amount)` builds an SPL `TransferChecked` (resolving the
+sender's + recipient's token accounts via RPC) and broadcasts it. The recipient must already
+hold a USDC token account (Circle's drip creates one). Live broadcast needs a devnet-funded
+USDC hot wallet (Circle key / web faucet — see the custody table). Message layout is
+vector-verified offline (`TestSPLTransferMessage`); the resolve + recipient-missing guard is
+covered by `TestSendSPL_*`. Note: the Solana deposit *watcher* (`Received`) credits native SOL
+only — SPL-deposit auto-credit is a follow-up; Stellar remains the live-verified full-loop USDC
+reference.
+
 ## Metrics scrape + rate-limit trip (network: localhost)
 With `metrics.enabled: true`: `curl -s localhost:9090/metrics | grep exchange_`. Hammer a
 REST edge past `rate_per_sec` and expect `429` / `-1003`.

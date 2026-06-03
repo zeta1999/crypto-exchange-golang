@@ -43,10 +43,13 @@ go test ./internal/api/binance/... ./internal/api/coinbase/... ./internal/accoun
         ./internal/api/httpserver/... ./internal/transfer/... -count=1
 ```
 **Expected:** green. Covers signed REST/WS, the CCXT-style body-signed POST, exchangeInfo /
-products discovery, fill-report latency, the **balance ledger** (lock-on-place, settle-on-fill
-with price-improvement refund, cancel-unlock, insufficient-balance rejection, underfunded-market
-no-mint guard), and the **transfer flow** (withdraw endpoint, native `/transfer`, hub
-debit→send→credit with the precision-quantize guard, fake-backend deposit watcher).
+products discovery, fill-report latency, the **Binance `@depth` incremental diff stream**
+(depthUpdate deltas + monotonic U/u continuity, REST `lastUpdateId` sync), the **Coinbase fee
+fields** (total_fees/total_value_after_fees per side, product price_increment), the **balance
+ledger** (lock-on-place, settle-on-fill with price-improvement refund, cancel-unlock,
+insufficient-balance rejection, underfunded-market no-mint guard), and the **transfer flow**
+(withdraw endpoint, native `/transfer`, hub debit→send→credit with the precision-quantize
+guard, fake-backend deposit watcher).
 
 ## 4. Custody toolkit (encoders, keystore, chains)
 
@@ -54,9 +57,11 @@ debit→send→credit with the precision-quantize guard, fake-backend deposit wa
 go test ./internal/custody/... -count=1
 ```
 **Expected:** green. StrKey/base58/bech32/EIP-55 validated against **real on-chain vectors**
-(Circle USDC issuer/mint, secp256k1 privkey=1, BIP-173); Argon2id+memguard keystore
-round-trip + wrong-passphrase + downgraded-KDF rejection; Circle/SPL/faucet guards (httptest,
-no network).
+(Circle USDC issuer/mint, secp256k1 privkey=1, BIP-173); transaction signing vector-checked
+(EIP-155, BIP-143, Solana System transfer **and SPL `TransferChecked` for USDC**); the Solana
+SPL send's token-account resolution + recipient-missing-account guard (httptest RPC fake);
+Argon2id+memguard keystore round-trip + wrong-passphrase + downgraded-KDF rejection;
+Circle/SPL/faucet guards (httptest, no network).
 
 ## 5. Offline binary smoke (replay venue, plain HTTP, no network)
 

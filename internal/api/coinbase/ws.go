@@ -116,6 +116,7 @@ type userOrder struct {
 	Status             string `json:"status"`
 	CumulativeQuantity string `json:"cumulative_quantity"`
 	AvgPrice           string `json:"avg_price"`
+	TotalFees          string `json:"total_fees"`
 }
 
 // userEvent is the user-channel payload.
@@ -524,6 +525,7 @@ func (s *Server) EmitUserByOrderID(orderID string) {
 // emitUser broadcasts a user-channel frame for one order record to all
 // authenticated user subscribers.
 func (s *Server) emitUser(rec orderRecord) {
+	totalFees, _ := orderFees(rec, s.effFeeRate())
 	uo := userOrder{
 		OrderID:            rec.OrderID,
 		ClientOrderID:      rec.ClientOrderID,
@@ -533,6 +535,7 @@ func (s *Server) emitUser(rec orderRecord) {
 		Status:             rec.Status,
 		CumulativeQuantity: rec.FilledSize.StringPrec(sizePrec),
 		AvgPrice:           rec.avgFilledPrice().StringPrec(pricePrec),
+		TotalFees:          totalFees,
 	}
 	ev := userEvent{Type: "update", Orders: []userOrder{uo}}
 	s.broadcaster.publishUser(func(c *wsConn) []byte {
