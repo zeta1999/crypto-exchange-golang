@@ -379,6 +379,8 @@ func transferBackend(chain string) transfer.Backend {
 		return custody.NewEVM()
 	case "sol":
 		return custody.NewSolana()
+	case "btc":
+		return custody.NewBitcoin()
 	default:
 		return nil
 	}

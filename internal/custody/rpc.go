@@ -59,6 +59,29 @@ func httpGet(ctx context.Context, hc *http.Client, url string) ([]byte, error) {
 	return body, nil
 }
 
+// httpPost performs a POST with a text body and returns the (capped) body,
+// erroring on non-2xx. Used for Esplora's raw-tx broadcast endpoint.
+func httpPost(ctx context.Context, hc *http.Client, url, body string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return respBody, &httpStatusError{status: resp.StatusCode, body: truncate(respBody, 300)}
+	}
+	return respBody, nil
+}
+
 // jsonRPCRequest is a JSON-RPC 2.0 request envelope.
 type jsonRPCRequest struct {
 	JSONRPC string `json:"jsonrpc"`
