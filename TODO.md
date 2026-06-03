@@ -67,7 +67,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] wired into binary: feed subscribes trades; per-instrument tape goroutines; tape orders margin-exempt
 - [x] tests: user limit fills consistent with tape (buy/sell), price-capped, IOC no-remainder, non-finite/unknown-side guards
 - [x] brutal review + fixes (IOC primitive vs place-then-cancel, NaN/Inf panic guard, HOL decouple)
-- [ ] real-time vs accelerated (`speed`) clock — deferred to Phase 7 (trace replay drives the clock)
+- [x] real-time vs accelerated (`speed`) clock — done in Phase 7 (`replay.WithSpeed`)
 
 ## Phase 6 — Configurable toxicity [b] — DONE
 - [x] `internal/toxicity/kyle.go`: signed-volume → Δprice regression (λ)
@@ -78,27 +78,24 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] brutal review + fixes (bounded sweep, panic guard, weight/VPIN clamps)
 
 ## Phase 7 — Scenario & fault injection (OMS / strategy test bed)
-- [x] Trace replay (full): `venue: replay` feeds the whole emulator from a recorded trace, offline + deterministic (reuses Phase 1 replay.Source; integration-tested + live-verified). `speed` pacing reserved/deferred.
-- [x] `internal/emulator/latency.go`: artificial latency — feed→book (wired), **order_ack wired at both API edges** (WithAckDelay; live-verified), per-edge, jitter. fill_report deferred (needs async WS delivery, can't sleep in the book hook)
+- [x] Trace replay (full): `venue: replay` feeds the whole emulator from a recorded trace, offline + deterministic (reuses Phase 1 replay.Source; integration-tested + live-verified). **`speed` pacing done** (`replay.WithSpeed`: <=0 fast/deterministic, 1.0 real time, Nx).
+- [x] `internal/emulator/latency.go`: artificial latency — feed→book (wired), **order_ack + fill_report wired at both API edges** (WithAckDelay sync; WithFillDelay async-holds the fill WS push; live-verified), per-edge. Jitter is **uniform OR shifted-Poisson** (`distribution` knob).
 - [x] `internal/emulator/priceshift.go`: artificial price shift — `offset_bps` + `scale` per venue (wired into dispatcher; shifts both float Price and PriceDecimal)
-- [ ] cross-venue dislocation harness (two venues driven apart → closeable arbitrage)
+- [x] cross-venue dislocation harness (`ArbHarness` mirrors one reference into two shifted venues; `CrossArb` detector; test proves exploitable-then-closeable arb)
 - [x] scenario scripting format (JSONL): timeline of injection events (`scenario.go`; runtime-mutable `Controls`; price_shift+latency actions; deterministic; reviewed)
 - [x] config: `emulator.{latency,price_shift,scenario}`
-- [ ] tests: zeroed controls = no-op; injected latency shows in ack/fill timestamps;
-      seeded scenario reproduces bit-for-bit; arb scenario is exploitable then closes
+- [x] deterministic clock (`OrderBook.SetClock`) + golden tests: zeroed controls = no-op; injected latency shows in ack/fill timestamps; seeded scenario reproduces bit-for-bit; arb scenario is exploitable then closes
 
 ## Protocol compliance (cross-cutting, Phases 8–9)
-- [ ] Validate the Binance/Coinbase-compatible API edges against a **real exchange-client
-      library** pointed at the emulator with **only the endpoint/base-URL changed** — the
-      library is the conformance oracle (if a stock client trades against us unmodified, we're
-      compliant). Candidates:
-  - **CCXT** (JS/Python, `ccxt`) — broadest coverage; set `exchange.urls['api'] = <emulator>`.
-  - **GoEx / GoCryptoCurrencies** (Go, e.g. `github.com/nntaoli-project/goex`) — keeps the
-      test client in-repo/in-language; point its REST/WS base at the emulator.
-- [ ] Prefer an **unmodified** client (endpoint swap only); if a fork is unavoidable, vendor a
-      minimal copy and document exactly what changed (ideally just the base URL / TLS skip).
-- [ ] Use the chosen client to drive conformance tests: place/cancel/query orders, stream
-      depth/trades + user data; diff responses vs the real venue's documented shapes.
+- [x] Validated the Binance edge against the **stock `ccxt-go` v4 client** with **only the
+      base URL changed** (`conformance/ccxt-go/`): loadMarkets → fetchOrderBook →
+      createLimitOrder → fetchOpenOrders → cancelOrder all pass. Surfaced + fixed two real
+      conformance bugs (sign over query+body; timestamp from body).
+- [x] Unmodified client (endpoint swap only); kept as a separate nested module so its dep tree
+      stays out of the main module + CI.
+- [x] Conformance drive: place/cancel/query + read order book via the stock client.
+- [ ] (follow-up) Coinbase conformance via CCXT — needs picking the CCXT class matching the
+      auth scheme (modern `coinbase` = ES256 JWT; legacy `coinbaseadvanced` = HMAC).
 
 ## Phase 8 — Binance-compatible API
 - [x] `internal/api/binance/rest.go`: order POST/DELETE, openOrders, depth, ticker, account (stub balances)
@@ -106,9 +103,9 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] symbol mapping (config BTCUSDT↔BTC-USD); registry w/ hook-driven fill tracking; wired behind config
 - [x] tests (23) + brutal review + fixes (panic guard, phantom-record rollback); live-verified signed order
 - [x] `internal/api/binance/ws.go`: market streams (@trade/@depth20) + user-data executionReport (listenKey)
-- [ ] /exchangeInfo, per-symbol precision filters, real balances — deferred
-- [ ] latency injection (Phase 7) applied at this edge (order_ack/fill_report)
-- [ ] conformance: drive with CCXT / GoEx (endpoint-swapped); also `python-binance`/curl
+- [x] /exchangeInfo (CCXT loadMarkets: symbols + PRICE_FILTER/LOT_SIZE/NOTIONAL); real balances still deferred
+- [x] latency injection applied at this edge (order_ack sync + fill_report async)
+- [x] conformance: ccxt-go v4 (endpoint-swapped) — PASS
 
 ## Phase 9 — Coinbase-compatible API
 - [x] `internal/api/coinbase/rest.go`: create/batch_cancel/list orders (historical), product_book, products/ticker, accounts (stub)
@@ -117,15 +114,20 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] tests (31) + brutal review (clean, no fixes needed); live-verified signed create + list
 - [x] `internal/api/coinbase/ws.go`: level2, market_trades, user channels (message-based subscribe)
 - [x] JWT/ES256 production auth (`jwt.go`: ECDSA P-256 verify, Bearer REST + WS jwt field; dependency-free; live-verified)
+- [x] /products list endpoint (CCXT loadMarkets: base/quote ids + increments + min size)
+- [x] latency injection applied at this edge (order_ack sync + fill_report async)
 - [ ] fee/precision fields, persisted terminal-order history — deferred
-- [ ] conformance: drive with CCXT / GoEx (endpoint-swapped); also Coinbase Advanced Trade client/curl
+- [ ] conformance via CCXT (endpoint-swapped) — follow-up (JWT vs HMAC class choice)
 
-## Phase 10 — Custody examples (stretch, testnet only)
-- [ ] `internal/custody/chain.go`: `Chain` interface (address, deposits, withdraw)
-- [ ] XLM (Horizon testnet)
-- [ ] Solana (devnet)
-- [ ] ERC20 (Sepolia)
-- [ ] wire balances into account endpoints; off-by-default flag; keys via env only
+## Phase 10 — Custody examples (stretch, testnet only) — DONE (toolkit)
+- [x] `internal/custody/chain.go`: `Chain`/`Faucet`/`TokenPreparer` interfaces + testnet-only `MustTestnet` guard
+- [x] **Encrypted keystore**: AES-256-GCM, **Argon2id** KDF (single-lane, 64 MiB; memguard locked-memory enclave for the key), `CUSTODY_PASSPHRASE` env-only
+- [x] XLM (friendbot, Horizon) + USDC trustline (stellar/go changeTrust sign+submit)
+- [x] Solana (devnet airdrop, getBalance) + USDC SPL balance
+- [x] ETH/ERC20 on Sepolia (secp256k1/keccak EIP-55, eth_getBalance + balanceOf)
+- [x] Bitcoin testnet (secp256k1, hand-rolled bech32 P2WPKH `tb1`, Esplora balance)
+- [x] USDC faucet via Circle drip (`CIRCLE_API_KEY`) with web-faucet fallback; `cmd/custody` CLI; off by default, NOT wired into the server. Encoders validated against real on-chain vectors + live taps.
+- [ ] (deferred) wire custody balances into the exchange account endpoints; withdrawal/transfer signing beyond the trustline
 
 ## Phase 11 — Hardening & observability
 - [x] Prometheus-text metrics (`internal/metrics`, dependency-free): orders/trades/cancels by edge, feed events, converge/RTR/tape/toxicity, per-instrument synthetic/anomalies/crossings/stale/VPIN/λ gauges; `:9090/metrics`
@@ -133,4 +135,4 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] brutal review + hardening (KeyedLimiter maxKeys cap)
 - [ ] scenario + golden-file tests in CI (RTR, toxicity, fault injection)
 - [ ] gRPC/native-WS request metrics; injected-latency histograms
-- [ ] README refresh with run instructions
+- [x] README refresh with run instructions (branded README + capabilities)
