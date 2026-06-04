@@ -1,0 +1,71 @@
+# fix-test.yaml — FIX 4.4 acceptor integration-test preset (CR-8).
+#
+# A consumer (e.g. Vivaldi's OMS) can boot this verbatim and connect a FIX
+# initiator to localhost:8195 to drive order entry + a FIX market-data /
+# liquidity search against the same matching engine the REST edge uses.
+#
+# Deterministic + offline (like oms-test.yaml):
+#   * emulator.enabled: false  -> a plain price-time matching engine; the book
+#                                 holds only what clients place.
+#   * FIX acceptor on a FIXED port :8195, SenderCompID "MIRAGE".
+#   * BTCUSDT (FIX Symbol / tag 55) <-> BTC-USD (engine) symbol map.
+#   * The Binance REST edge stays on :8192 too, so REST + FIX can be exercised
+#     against the same book in one boot.
+#
+# Boot:  EXCHANGE_CONFIG=configs/fix-test.yaml go run ./cmd/exchange
+#
+# FIX flow (FIX 4.4):
+#   Logon (A) -> Logon ack
+#   NewOrderSingle (D)        -> ExecutionReport (8) New, then Trade/Filled on a fill
+#   OrderCancelRequest (F)    -> ExecutionReport (8) Canceled, or OrderCancelReject (9)
+#   OrderCancelReplace (G)    -> cancel + replace
+#   MarketDataRequest (V)     -> MarketDataSnapshotFullRefresh (W) [+ incremental X on subscribe]
+# A duplicate ClOrdID (11) is rejected, never a second resting order.
+network:
+  listen_grpc: ":50091"
+  listen_http: ":8190"
+  listen_ws: ":8191"
+  token_secret: "fix-test-token"
+  tls:
+    cert_file: ""
+    key_file: ""
+database:
+  dsn: "memory"
+limits:
+  max_open_orders: 5000
+  min_tick_size: 0.01
+instruments:
+  - symbol: "BTC-USD"
+    base: "BTC"
+    quote: "USD"
+storage:
+  wal_path: "data/fix-test.wal"
+api:
+  binance:
+    enabled: true
+    listen: ":8192"
+    api_key: "k"
+    secret: "s"
+    rate_per_sec: 0
+    burst: 0
+    symbols:
+      - binance: "BTCUSDT"
+        engine: "BTC-USD"
+    balances:
+      USD: "1000000"
+      BTC: "10"
+  fix:
+    enabled: true
+    listen: ":8195"            # FIXED port — consumer connects its FIX initiator here
+    sender_comp_id: "MIRAGE"   # the acceptor's CompID (client's TargetCompID)
+    symbols:                   # FIX Symbol (tag 55) -> engine instrument
+      - binance: "BTCUSDT"     # (SymbolPair.binance holds the FIX symbol)
+        engine: "BTC-USD"
+  coinbase:
+    enabled: false
+metrics:
+  enabled: false
+emulator:
+  enabled: false
+transfer:
+  enabled: false

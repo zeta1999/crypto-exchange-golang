@@ -69,6 +69,19 @@ func TestValidateOptionsTestYAML(t *testing.T) {
 	}
 }
 
+func TestValidateFIXTestYAML(t *testing.T) {
+	cfg, err := Load("../../configs/fix-test.yaml")
+	if err != nil {
+		t.Fatalf("load fix-test.yaml: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("fix-test.yaml is invalid: %v", err)
+	}
+	if !cfg.API.FIX.Enabled || cfg.API.FIX.SenderCompID == "" || len(cfg.API.FIX.Symbols) == 0 {
+		t.Fatal("fix-test.yaml should enable a FIX acceptor with a symbol map")
+	}
+}
+
 func TestValidateInvalid(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -118,6 +131,18 @@ func TestValidateInvalid(t *testing.T) {
 				{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", IndexEngine: "NOPE", Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}},
 			}}
 		}, "is not a configured instrument"},
+		{"fix no listen", func(c *Config) {
+			c.API.FIX = FIXConfig{Enabled: true, SenderCompID: "M", Symbols: []SymbolPair{{Binance: "BTCUSDT", Engine: "BTC-USD"}}}
+		}, "fix.listen"},
+		{"fix no compid", func(c *Config) {
+			c.API.FIX = FIXConfig{Enabled: true, Listen: ":8195", Symbols: []SymbolPair{{Binance: "BTCUSDT", Engine: "BTC-USD"}}}
+		}, "sender_comp_id"},
+		{"fix no symbols", func(c *Config) {
+			c.API.FIX = FIXConfig{Enabled: true, Listen: ":8195", SenderCompID: "M"}
+		}, "fix.symbols"},
+		{"fix bad engine", func(c *Config) {
+			c.API.FIX = FIXConfig{Enabled: true, Listen: ":8195", SenderCompID: "M", Symbols: []SymbolPair{{Binance: "BTCUSDT", Engine: "NOPE"}}}
+		}, "not a configured instrument"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/account"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/binance"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/coinbase"
+	"github.com/zeta1999/crypto-exchange-golang/internal/api/fix"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/grpcserver"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/httpserver"
 	wsadapter "github.com/zeta1999/crypto-exchange-golang/internal/api/ws"
@@ -237,6 +238,27 @@ func main() {
 		group.Go(func() error {
 			log.Printf("Binance REST edge listening on %s", bcfg.Listen)
 			if err := binance.ListenAndServe(ctx, bcfg.Listen, binanceSrv, cfg.Network.TLS.CertFile, cfg.Network.TLS.KeyFile); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
+		})
+	}
+
+	// Optional FIX 4.4 acceptor edge (CR-8): order entry + market-data /
+	// liquidity search against the SAME engine. Additive, gated behind
+	// cfg.API.FIX.Enabled.
+	if cfg.API.FIX.Enabled {
+		fcfg := cfg.API.FIX
+		fixSyms := make(map[string]string, len(fcfg.Symbols))
+		for _, sp := range fcfg.Symbols {
+			fixSyms[sp.Binance] = sp.Engine
+		}
+		resolve := func(sym string) (string, bool) { es, ok := fixSyms[sym]; return es, ok }
+		fixSrv := fix.NewServer(newMeteredEngine(eng, ordersPlaced, "fix"), resolve, fcfg.SenderCompID, nil)
+		fixSrv.AttachHooks(book)
+		group.Go(func() error {
+			log.Printf("FIX 4.4 acceptor listening on %s (SenderCompID %s)", fcfg.Listen, fcfg.SenderCompID)
+			if err := fixSrv.ListenAndServe(ctx, fcfg.Listen); err != nil && !errors.Is(err, context.Canceled) {
 				return err
 			}
 			return nil

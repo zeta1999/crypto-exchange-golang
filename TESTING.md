@@ -204,6 +204,66 @@ kill $PID 2>/dev/null; rm -f /tmp/opt-exchange data/options-test.wal
 × call/put). The live mark drifts from the §8 golden because the running server uses
 wall-clock `time.Now` (so time-to-expiry differs); the golden uses a fixed clock.
 
+## 9. FIX 4.4 acceptor — order entry + liquidity search (CR-8)
+
+A FIX 4.4 acceptor edge so an OMS (Vivaldi) can connect as a FIX initiator and
+drive order entry + a FIX market-data / liquidity search against the **same**
+matching engine the REST edge uses.
+
+```sh
+go test ./internal/api/fix/... -count=1
+go test ./internal/api/fix/... -race -count=1   # fill routing crosses goroutines
+```
+**Expected:** green. Covers the **codec** (BodyLength + CheckSum compute/validate,
+tampered/short/wrong-version rejection, repeating-group order), the **data
+dictionary** (required-tag conformance), the **session** (Logon handshake,
+sequence numbers, Reject on a missing required tag), and the full **order flow**
+against a real engine over an in-memory pipe: Logon → NewOrderSingle (D) →
+ExecutionReport New → a crossing fill → ExecutionReport Trade/Filled →
+OrderCancelRequest (F) → Canceled (and OrderCancelReject on an unknown order) →
+**duplicate ClOrdID rejected, never a second resting order** → MarketDataRequest
+(V) → MarketDataSnapshotFullRefresh (W). The `-race` run guards the fill-routing
+path (a book "trade" hook on one goroutine sends an ExecutionReport to another
+session) — the acceptor enqueues to a per-session writer goroutine so it never
+does network I/O while the engine holds the book lock.
+
+### 9.1 FIX preset boot smoke (CR-8, no network)
+
+Boots `configs/fix-test.yaml` verbatim (FIX acceptor on :8195, SenderCompID
+MIRAGE, BTCUSDT↔BTC-USD) alongside the Binance REST edge on :8192.
+
+```sh
+go build -o /tmp/fix-exchange ./cmd/exchange
+EXCHANGE_CONFIG=configs/fix-test.yaml /tmp/fix-exchange >/tmp/fix-smoke.log 2>&1 &
+PID=$!; sleep 4
+# the acceptor is listening on :8195 (a raw FIX socket; the Go tests drive the
+# protocol — here we just assert the edge bound its port and logged startup).
+grep -q "FIX 4.4 acceptor listening on :8195" /tmp/fix-smoke.log && echo "OK fix-listen" || echo "FAIL fix-listen"
+(exec 3<>/dev/tcp/127.0.0.1/8195) 2>/dev/null && echo "OK fix-port-open" || echo "FAIL fix-port"
+kill $PID 2>/dev/null; rm -f /tmp/fix-exchange data/fix-test.wal
+```
+**Expected:** both print `OK …` (the edge bound :8195 and logged startup). The
+FIX *protocol* round-trip is exercised by the Go tests above; this smoke only
+proves the shipped preset boots and the acceptor binds its socket.
+
+### How to run FIX protocol validation (the CR-8 question)
+
+Three layers, cheapest first:
+
+1. **Data-dictionary conformance (offline, CI).** Every encoded/decoded message
+   is validated structurally (BeginString, BodyLength, CheckSum) by the codec and
+   against a FIX 4.4 dictionary of required tags per message type. Run
+   `go test ./internal/api/fix/...` — `TestEncode_*`, `TestDecode_*`,
+   `TestFIX_MissingRequiredTagRejected` cover it.
+2. **Session conformance (offline, CI).** The `TestFIX_*` flow tests drive a full
+   Logon → order → ExecutionReport → cancel → market-data exchange (seq numbers,
+   Reject, OrderCancelReject) against a real engine. Run with `-race`.
+3. **Reference-engine cross-check (EXTRA-TESTING, out of band).** Point a
+   battle-tested initiator — **QuickFIX/J** or **quickfix-go** — at
+   `configs/fix-test.yaml` on `:8195`, replay a session, and diff message-level
+   behavior. Needs an external FIX engine, so it lives in
+   [EXTRA-TESTING.md](EXTRA-TESTING.md), not CI.
+
 ---
 
 **Per-phase rule:** after a phase → `./ci.sh` → brutal-review subagent + fixes → a subagent

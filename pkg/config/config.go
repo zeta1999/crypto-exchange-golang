@@ -85,6 +85,18 @@ type Metrics struct {
 type APIConfig struct {
 	Binance  BinanceConfig  `yaml:"binance"`
 	Coinbase CoinbaseConfig `yaml:"coinbase"`
+	FIX      FIXConfig      `yaml:"fix"`
+}
+
+// FIXConfig configures the FIX 4.4 acceptor edge (CR-8): order entry + a FIX
+// market-data / liquidity search against the same matching engine. Disabled by
+// default. Symbols maps a FIX Symbol (tag 55) to an engine instrument (the
+// SymbolPair.Binance field holds the FIX symbol, e.g. "BTCUSDT").
+type FIXConfig struct {
+	Enabled      bool         `yaml:"enabled"`
+	Listen       string       `yaml:"listen"`
+	SenderCompID string       `yaml:"sender_comp_id"`
+	Symbols      []SymbolPair `yaml:"symbols"`
 }
 
 // BinanceConfig configures the Binance-spot-compatible REST edge (PLAN Phase
@@ -417,6 +429,26 @@ func (c *Config) validateAPI(engine map[string]bool, add func(string, ...interfa
 				if u.IndexEngine == "" && !(u.StaticIndex > 0) {
 					add("api.binance.options.underlyings[%d] (%s): set index_engine or a positive static_index", i, u.Underlying)
 				}
+			}
+		}
+	}
+	if f := c.API.FIX; f.Enabled {
+		if strings.TrimSpace(f.Listen) == "" {
+			add("api.fix.listen must not be empty when enabled")
+		}
+		if strings.TrimSpace(f.SenderCompID) == "" {
+			add("api.fix.sender_comp_id must not be empty when enabled")
+		}
+		if len(f.Symbols) == 0 {
+			add("api.fix.symbols must map at least one symbol when enabled")
+		}
+		for _, sp := range f.Symbols {
+			if sp.Binance == "" || sp.Engine == "" {
+				add("api.fix.symbols: each entry needs both a fix symbol and an engine instrument")
+				continue
+			}
+			if !engine[sp.Engine] {
+				add("api.fix.symbols: engine %q is not a configured instrument", sp.Engine)
 			}
 		}
 	}
