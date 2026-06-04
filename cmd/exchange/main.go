@@ -22,12 +22,14 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/engine"
 	"github.com/zeta1999/crypto-exchange-golang/internal/margin"
 	"github.com/zeta1999/crypto-exchange-golang/internal/metrics"
+	"github.com/zeta1999/crypto-exchange-golang/internal/optmarket"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
 	"github.com/zeta1999/crypto-exchange-golang/internal/transfer"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/config"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/options"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/wal"
 	"golang.org/x/sync/errgroup"
 )
@@ -224,6 +226,12 @@ func main() {
 		if apiFillDelay != nil {
 			opts = append(opts, binance.WithFillDelay(apiFillDelay))
 		}
+		if om, err := buildOptionsMarket(bcfg.Options, eng); err != nil {
+			log.Fatalf("options market (EAPI): %v", err)
+		} else if om != nil {
+			opts = append(opts, binance.WithOptionsMarket(om))
+			log.Printf("Binance options (EAPI) surface enabled: %d instruments", len(om.Instruments()))
+		}
 		binanceSrv := binance.New(newMeteredEngine(eng, ordersPlaced, "binance"), symbolMap, authn, registry, opts...)
 		binanceSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking
 		group.Go(func() error {
@@ -409,4 +417,51 @@ func buildLedger(balances map[string]string) *account.Ledger {
 		initial[asset] = v
 	}
 	return account.NewLedger(initial)
+}
+
+// buildOptionsMarket constructs the EAPI options market-data surface (CR-9) from
+// config, or returns (nil, nil) when disabled. The spot index for each
+// underlying is read live from the engine's spot book mid, falling back to a
+// configured static index when that book is empty (e.g. a no-emulator preset).
+func buildOptionsMarket(cfg config.OptionsConfig, eng *engine.Engine) (*optmarket.Market, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	byUnderlying := make(map[string]config.OptionUnderlying, len(cfg.Underlyings))
+	for _, u := range cfg.Underlyings {
+		byUnderlying[u.Underlying] = u
+	}
+	index := func(underlying string) (float64, bool) {
+		u, ok := byUnderlying[underlying]
+		if !ok {
+			return 0, false
+		}
+		if u.IndexEngine != "" {
+			if snap, err := eng.Snapshot(u.IndexEngine); err == nil &&
+				!snap.BestBid.IsZero() && !snap.BestAsk.IsZero() {
+				if mid := (snap.BestBid.Float64() + snap.BestAsk.Float64()) / 2; mid > 0 {
+					return mid, true
+				}
+			}
+		}
+		if u.StaticIndex > 0 {
+			return u.StaticIndex, true
+		}
+		return 0, false
+	}
+	m := optmarket.NewMarket(time.Now, index, cfg.Rate, cfg.IVSpread, cfg.BookHalfSpread, cfg.PriceBand)
+	for _, u := range cfg.Underlyings {
+		m.SetSurface(u.Underlying, optmarket.VolSurface{ATMVol: u.ATMVol, Skew: u.Skew, Smile: u.Smile})
+		for _, exp := range u.Expiries {
+			date, err := time.Parse("2006-01-02", exp)
+			if err != nil {
+				return nil, fmt.Errorf("underlying %s: bad expiry %q: %w", u.Underlying, exp, err)
+			}
+			for _, strike := range u.Strikes {
+				m.AddInstrument(optmarket.NewInstrument(u.Coin, u.Underlying, u.Quote, strike, options.Call, date))
+				m.AddInstrument(optmarket.NewInstrument(u.Coin, u.Underlying, u.Quote, strike, options.Put, date))
+			}
+		}
+	}
+	return m, nil
 }

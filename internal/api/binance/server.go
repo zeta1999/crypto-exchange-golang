@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/account"
+	"github.com/zeta1999/crypto-exchange-golang/internal/optmarket"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
 	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
@@ -39,8 +40,9 @@ type Server struct {
 	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
 	ackDelay    func() time.Duration
 	fillDelay   func() time.Duration
-	ledger      *account.Ledger // optional: real balances + lock/settle on trade
-	withdraw    WithdrawFunc    // optional: on-chain withdrawal (transfer hub)
+	ledger      *account.Ledger   // optional: real balances + lock/settle on trade
+	withdraw    WithdrawFunc      // optional: on-chain withdrawal (transfer hub)
+	optMarket   *optmarket.Market // optional: EAPI options market-data surface (CR-9)
 }
 
 // WithdrawFunc debits this venue's ledger and sends an on-chain payment of
@@ -168,6 +170,17 @@ func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Regis
 	// WebSocket streams: raw single stream / listenKey, and combined.
 	s.mux.HandleFunc("/ws/", s.handleRawStream)
 	s.mux.HandleFunc("/stream", s.handleCombinedStream)
+
+	// Options market-data surface (EAPI), public/unsigned. Registered only when
+	// an options market is wired (CR-9).
+	if s.optMarket != nil {
+		s.mux.HandleFunc("/eapi/v1/ping", s.handlePing)
+		s.mux.HandleFunc("/eapi/v1/time", s.handleTime)
+		s.mux.HandleFunc("/eapi/v1/exchangeInfo", s.handleOptionExchangeInfo)
+		s.mux.HandleFunc("/eapi/v1/mark", s.handleOptionMark)
+		s.mux.HandleFunc("/eapi/v1/depth", s.handleOptionDepth)
+		s.mux.HandleFunc("/eapi/v1/index", s.handleOptionIndex)
+	}
 
 	s.handler = s.middleware(s.mux)
 	return s

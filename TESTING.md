@@ -164,6 +164,46 @@ kill $PID 2>/dev/null; rm -f /tmp/oms-exchange data/oms-test.wal
 §3 (`TestOMSFlow_Acceptance`, `TestPlaceOrder_Duplicate*`, `TestQueryOrder_*`); the boot smoke
 additionally proves the shipped preset is bootable verbatim on plain HTTP.
 
+## 8. Options market data — EAPI surface + recorded fixtures (CR-9)
+
+The Binance-EAPI-compatible options market-data surface: European, cash-settled
+options priced with Black–Scholes off the spot index, exposed on `/eapi/v1/*`.
+Market data only (no options order entry).
+
+```sh
+go test ./pkg/options/... ./internal/optmarket/... -count=1
+go test ./internal/api/binance/ -run 'TestEAPI' -count=1
+```
+**Expected:** green. Covers the BS pricer/greeks vs the canonical textbook vector
+(S=K=100, vol=20%, r=5%, T=1 → pv≈10.4506, delta≈0.6368, put–call parity, no-NaN
+degenerate inputs); the **recorded golden snapshot** of the full EAPI surface
+(`testdata/optmarket/eapi_snapshot.json` — a deterministic non-regression fixture,
+refresh with `UPDATE_GOLDEN=1`); and the HTTP edge (`exchangeInfo` lists the chain,
+`mark` returns mark price + IV + greeks and **carries no `rho`** per EAPI, `depth`
+is a well-formed book, `index` reports the spot, unknown symbols error, and the
+`/eapi` routes are **absent** unless an options market is wired).
+
+### 8.1 Options preset boot smoke (CR-9, plain HTTP, no network)
+
+Boots `configs/options-test.yaml` verbatim (Binance edge :8192, options enabled,
+static index 50000, no emulator) and reads the surface.
+
+```sh
+go build -o /tmp/opt-exchange ./cmd/exchange
+EXCHANGE_CONFIG=configs/options-test.yaml /tmp/opt-exchange >/tmp/opt-smoke.log 2>&1 &
+PID=$!; sleep 6
+B=http://localhost:8192
+curl -s "$B/eapi/v1/exchangeInfo" | grep -q '"optionSymbols"' && echo "OK exchangeInfo" || echo "FAIL exchangeInfo"
+curl -s "$B/eapi/v1/mark?symbol=BTC-261231-50000-C" | grep -q '"markIV"' && echo "OK mark" || echo "FAIL mark"
+curl -s "$B/eapi/v1/mark?symbol=BTC-261231-50000-C" | grep -q '"rho"' && echo "FAIL rho-present" || echo "OK no-rho"
+curl -s "$B/eapi/v1/index?underlying=BTCUSDT" | grep -q '"indexPrice":"50000' && echo "OK index" || echo "FAIL index"
+curl -s "$B/eapi/v1/depth?symbol=BTC-261231-50000-C&limit=3" | grep -q '"asks"' && echo "OK depth" || echo "FAIL depth"
+kill $PID 2>/dev/null; rm -f /tmp/opt-exchange data/options-test.wal
+```
+**Expected:** every line prints `OK …` (16 option symbols = 4 strikes × 2 expiries
+× call/put). The live mark drifts from the §8 golden because the running server uses
+wall-clock `time.Now` (so time-to-expiry differs); the golden uses a fixed clock.
+
 ---
 
 **Per-phase rule:** after a phase → `./ci.sh` → brutal-review subagent + fixes → a subagent

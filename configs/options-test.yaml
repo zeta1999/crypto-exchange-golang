@@ -1,0 +1,79 @@
+# options-test.yaml — options market-data integration-test preset (CR-9).
+#
+# A consumer (e.g. Vivaldi's vivaldi-optdata) can boot this verbatim and read the
+# Binance-EAPI-compatible options surface on http://localhost:8192:
+#
+#   GET /eapi/v1/exchangeInfo                 option contract specs
+#   GET /eapi/v1/mark[?symbol=...]            mark price + IV + greeks (no rho)
+#   GET /eapi/v1/depth?symbol=...&limit=...   synthetic order book
+#   GET /eapi/v1/index?underlying=BTCUSDT     spot index
+#
+# It is the oms-test preset + an options surface. Deterministic + offline:
+#   * emulator.enabled: false  -> the spot book is empty, so the options index
+#                                 uses the configured static_index (50000) rather
+#                                 than a live mid. Marks are pure Black-Scholes off
+#                                 that index + the configured vol surface.
+#   * European, CASH-settled (USDT) options; expiry 08:00 UTC on the dates below.
+#   * spot /api/v3 order entry still works (same as oms-test) for combined tests.
+#
+# Boot:  EXCHANGE_CONFIG=configs/options-test.yaml go run ./cmd/exchange
+network:
+  listen_grpc: ":50091"
+  listen_http: ":8190"
+  listen_ws: ":8191"
+  token_secret: "options-test-token"
+  tls:
+    cert_file: ""
+    key_file: ""
+database:
+  dsn: "memory"
+limits:
+  max_open_orders: 5000
+  min_tick_size: 0.01
+instruments:
+  - symbol: "BTC-USD"
+    base: "BTC"
+    quote: "USD"
+storage:
+  wal_path: "data/options-test.wal"
+api:
+  binance:
+    enabled: true
+    listen: ":8192"
+    api_key: "k"
+    secret: "s"
+    rate_per_sec: 0
+    burst: 0
+    symbols:
+      - binance: "BTCUSDT"
+        engine: "BTC-USD"
+    balances:
+      USD: "1000000"
+      BTC: "10"
+    options:
+      enabled: true
+      rate: 0.03              # risk-free rate (continuously compounded)
+      iv_spread: 0.02         # bid/ask IV half-spread (vol points)
+      book_half_spread: 0.02  # synthetic-book half-spread (fraction of mark)
+      price_band: 0.5         # high/low price-limit band (fraction of mark)
+      underlyings:
+        - underlying: "BTCUSDT"   # EAPI underlying / index pair
+          coin: "BTC"             # symbol prefix -> BTC-YYMMDD-STRIKE-{C|P}
+          quote: "USDT"           # cash-settlement asset
+          index_engine: "BTC-USD" # read spot mid here when the book is non-empty
+          static_index: 50000     # fallback when the spot book is empty (this preset)
+          atm_vol: 0.65
+          skew: -0.05
+          smile: 0.10
+          expiries:
+            - "2026-12-31"
+            - "2027-03-27"
+          strikes: [40000, 50000, 60000, 70000]
+  coinbase:
+    enabled: false
+metrics:
+  enabled: false
+emulator:
+  enabled: false
+transfer:
+  enabled: false

@@ -56,6 +56,19 @@ func TestValidateDevYAML(t *testing.T) {
 	}
 }
 
+func TestValidateOptionsTestYAML(t *testing.T) {
+	cfg, err := Load("../../configs/options-test.yaml")
+	if err != nil {
+		t.Fatalf("load options-test.yaml: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("options-test.yaml is invalid: %v", err)
+	}
+	if !cfg.API.Binance.Options.Enabled || len(cfg.API.Binance.Options.Underlyings) == 0 {
+		t.Fatal("options-test.yaml should enable an options surface")
+	}
+}
+
 func TestValidateInvalid(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -77,6 +90,34 @@ func TestValidateInvalid(t *testing.T) {
 		{"coinbase bad product", func(c *Config) { c.API.Coinbase.Products = []string{"NOPE"} }, "not a configured engine instrument"},
 		{"coinbase no listen", func(c *Config) { c.API.Coinbase.Listen = "" }, "coinbase.listen"},
 		{"metrics no listen", func(c *Config) { c.Metrics.Listen = "" }, "metrics.listen"},
+		{"options no underlyings", func(c *Config) {
+			c.API.Binance.Options = OptionsConfig{Enabled: true}
+		}, "options.underlyings"},
+		{"options missing fields", func(c *Config) {
+			c.API.Binance.Options = OptionsConfig{Enabled: true, Underlyings: []OptionUnderlying{
+				{StaticIndex: 50000, Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}},
+			}}
+		}, "coin and quote are required"},
+		{"options no expiry", func(c *Config) {
+			c.API.Binance.Options = OptionsConfig{Enabled: true, Underlyings: []OptionUnderlying{
+				{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", StaticIndex: 50000, Strikes: []float64{50000}},
+			}}
+		}, "at least one expiry"},
+		{"options bad strike", func(c *Config) {
+			c.API.Binance.Options = OptionsConfig{Enabled: true, Underlyings: []OptionUnderlying{
+				{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", StaticIndex: 50000, Expiries: []string{"2026-12-31"}, Strikes: []float64{-1}},
+			}}
+		}, "strikes must be > 0"},
+		{"options unpriceable", func(c *Config) {
+			c.API.Binance.Options = OptionsConfig{Enabled: true, Underlyings: []OptionUnderlying{
+				{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}},
+			}}
+		}, "index_engine or a positive static_index"},
+		{"options bad index_engine", func(c *Config) {
+			c.API.Binance.Options = OptionsConfig{Enabled: true, Underlyings: []OptionUnderlying{
+				{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", IndexEngine: "NOPE", Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}},
+			}}
+		}, "is not a configured instrument"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

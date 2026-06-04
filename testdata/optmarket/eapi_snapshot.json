@@ -1,0 +1,196 @@
+{
+  "depth": {
+    "T": 1780560000000,
+    "u": 1780560000000,
+    "bids": [
+      [
+        "9897.18910808",
+        "30.00000000"
+      ],
+      [
+        "9695.20565689",
+        "20.00000000"
+      ],
+      [
+        "9493.22220571",
+        "10.00000000"
+      ]
+    ],
+    "asks": [
+      [
+        "10301.15601045",
+        "30.00000000"
+      ],
+      [
+        "10503.13946163",
+        "20.00000000"
+      ],
+      [
+        "10705.12291282",
+        "10.00000000"
+      ]
+    ]
+  },
+  "exchangeInfo": {
+    "timezone": "UTC",
+    "serverTime": 1780560000000,
+    "optionSymbols": [
+      {
+        "symbol": "BTC-261231-40000-C",
+        "underlying": "BTCUSDT",
+        "quoteAsset": "USDT",
+        "strikePrice": "40000",
+        "expiryDate": 1798704000000,
+        "side": "CALL",
+        "unit": 1,
+        "priceScale": 2,
+        "quantityScale": 2
+      },
+      {
+        "symbol": "BTC-261231-40000-P",
+        "underlying": "BTCUSDT",
+        "quoteAsset": "USDT",
+        "strikePrice": "40000",
+        "expiryDate": 1798704000000,
+        "side": "PUT",
+        "unit": 1,
+        "priceScale": 2,
+        "quantityScale": 2
+      },
+      {
+        "symbol": "BTC-261231-50000-C",
+        "underlying": "BTCUSDT",
+        "quoteAsset": "USDT",
+        "strikePrice": "50000",
+        "expiryDate": 1798704000000,
+        "side": "CALL",
+        "unit": 1,
+        "priceScale": 2,
+        "quantityScale": 2
+      },
+      {
+        "symbol": "BTC-261231-50000-P",
+        "underlying": "BTCUSDT",
+        "quoteAsset": "USDT",
+        "strikePrice": "50000",
+        "expiryDate": 1798704000000,
+        "side": "PUT",
+        "unit": 1,
+        "priceScale": 2,
+        "quantityScale": 2
+      },
+      {
+        "symbol": "BTC-261231-60000-C",
+        "underlying": "BTCUSDT",
+        "quoteAsset": "USDT",
+        "strikePrice": "60000",
+        "expiryDate": 1798704000000,
+        "side": "CALL",
+        "unit": 1,
+        "priceScale": 2,
+        "quantityScale": 2
+      },
+      {
+        "symbol": "BTC-261231-60000-P",
+        "underlying": "BTCUSDT",
+        "quoteAsset": "USDT",
+        "strikePrice": "60000",
+        "expiryDate": 1798704000000,
+        "side": "PUT",
+        "unit": 1,
+        "priceScale": 2,
+        "quantityScale": 2
+      }
+    ]
+  },
+  "index": {
+    "indexPrice": "50000.00000000",
+    "time": 1780560000000
+  },
+  "mark": [
+    {
+      "symbol": "BTC-261231-40000-C",
+      "markPrice": "15231.49466648",
+      "bidIV": "0.64779959",
+      "askIV": "0.68779959",
+      "markIV": "0.66779959",
+      "delta": "0.76665406",
+      "theta": "-20.35721260",
+      "gamma": "0.00001209",
+      "vega": "11609.11599570",
+      "highPriceLimit": "22847.24199973",
+      "lowPriceLimit": "7615.74733324",
+      "riskFreeInterest": "0.03000000"
+    },
+    {
+      "symbol": "BTC-261231-40000-P",
+      "markPrice": "4547.00791528",
+      "bidIV": "0.64779959",
+      "askIV": "0.68779959",
+      "markIV": "0.66779959",
+      "delta": "-0.23334594",
+      "theta": "-17.12580055",
+      "gamma": "0.00001209",
+      "vega": "11609.11599570",
+      "highPriceLimit": "6820.51187292",
+      "lowPriceLimit": "2273.50395764",
+      "riskFreeInterest": "0.03000000"
+    },
+    {
+      "symbol": "BTC-261231-50000-C",
+      "markPrice": "10099.17255926",
+      "bidIV": "0.63089281",
+      "askIV": "0.67089281",
+      "markIV": "0.65089281",
+      "delta": "0.61095759",
+      "theta": "-24.21571813",
+      "gamma": "0.00001553",
+      "vega": "14541.10563965",
+      "highPriceLimit": "15148.75883889",
+      "lowPriceLimit": "5049.58627963",
+      "riskFreeInterest": "0.03000000"
+    },
+    {
+      "symbol": "BTC-261231-50000-P",
+      "markPrice": "9243.56412026",
+      "bidIV": "0.63089281",
+      "askIV": "0.67089281",
+      "markIV": "0.65089281",
+      "delta": "-0.38904241",
+      "theta": "-20.17645307",
+      "gamma": "0.00001553",
+      "vega": "14541.10563965",
+      "highPriceLimit": "13865.34618039",
+      "lowPriceLimit": "4621.78206013",
+      "riskFreeInterest": "0.03000000"
+    },
+    {
+      "symbol": "BTC-261231-60000-C",
+      "markPrice": "6615.19000667",
+      "bidIV": "0.62447146",
+      "askIV": "0.66447146",
+      "markIV": "0.64447146",
+      "delta": "0.46285689",
+      "theta": "-24.47428993",
+      "gamma": "0.00001625",
+      "vega": "15064.52761077",
+      "highPriceLimit": "9922.78501001",
+      "lowPriceLimit": "3307.59500334",
+      "riskFreeInterest": "0.03000000"
+    },
+    {
+      "symbol": "BTC-261231-60000-P",
+      "markPrice": "15588.45987987",
+      "bidIV": "0.62447146",
+      "askIV": "0.66447146",
+      "markIV": "0.64447146",
+      "delta": "-0.53714311",
+      "theta": "-19.62717186",
+      "gamma": "0.00001625",
+      "vega": "15064.52761077",
+      "highPriceLimit": "23382.68981980",
+      "lowPriceLimit": "7794.22993993",
+      "riskFreeInterest": "0.03000000"
+    }
+  ]
+}

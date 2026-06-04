@@ -103,6 +103,37 @@ type BinanceConfig struct {
 	// string, e.g. {USD: "1000000", BTC: "10"}). When non-empty, /account
 	// reports live balances and LIMIT orders lock funds (rejected if short).
 	Balances map[string]string `yaml:"balances"`
+	// Options enables the EAPI-compatible options market-data surface (CR-9).
+	Options OptionsConfig `yaml:"options"`
+}
+
+// OptionsConfig configures the Binance-EAPI-compatible options MARKET DATA
+// surface (CR-9): GET /eapi/v1/{exchangeInfo,mark,depth,index}. Data only — no
+// options order entry. Disabled by default.
+type OptionsConfig struct {
+	Enabled        bool               `yaml:"enabled"`
+	Rate           float64            `yaml:"rate"`             // risk-free rate (cont. comp.)
+	IVSpread       float64            `yaml:"iv_spread"`        // bid/ask IV half-spread, vol pts
+	BookHalfSpread float64            `yaml:"book_half_spread"` // synthetic-book half-spread, frac of mark
+	PriceBand      float64            `yaml:"price_band"`       // high/low price-limit band, frac of mark
+	Underlyings    []OptionUnderlying `yaml:"underlyings"`
+}
+
+// OptionUnderlying defines a per-underlying option chain + vol surface. Strikes ×
+// expiries × {call,put} are generated. The spot index is read from the engine
+// instrument IndexEngine (spot mid); StaticIndex is the fallback when that book
+// is empty (e.g. a no-emulator preset).
+type OptionUnderlying struct {
+	Underlying  string    `yaml:"underlying"`   // EAPI underlying, e.g. "BTCUSDT"
+	Coin        string    `yaml:"coin"`         // symbol prefix, e.g. "BTC"
+	Quote       string    `yaml:"quote"`        // cash-settle asset, e.g. "USDT"
+	IndexEngine string    `yaml:"index_engine"` // engine instrument for spot mid, e.g. "BTC-USD"
+	StaticIndex float64   `yaml:"static_index"` // fallback fixed index when no book
+	ATMVol      float64   `yaml:"atm_vol"`
+	Skew        float64   `yaml:"skew"`
+	Smile       float64   `yaml:"smile"`
+	Expiries    []string  `yaml:"expiries"` // "YYYY-MM-DD" (settles 08:00 UTC)
+	Strikes     []float64 `yaml:"strikes"`
 }
 
 // SymbolPair maps a Binance symbol ("BTCUSDT") to an engine instrument
@@ -359,6 +390,34 @@ func (c *Config) validateAPI(engine map[string]bool, add func(string, ...interfa
 		}
 		if b.Burst < 0 {
 			add("api.binance.burst must be >= 0")
+		}
+		if o := b.Options; o.Enabled {
+			if len(o.Underlyings) == 0 {
+				add("api.binance.options.underlyings must list at least one underlying when enabled")
+			}
+			for i, u := range o.Underlyings {
+				if u.Underlying == "" || u.Coin == "" || u.Quote == "" {
+					add("api.binance.options.underlyings[%d]: underlying, coin and quote are required", i)
+				}
+				if len(u.Expiries) == 0 {
+					add("api.binance.options.underlyings[%d] (%s): at least one expiry is required", i, u.Underlying)
+				}
+				if len(u.Strikes) == 0 {
+					add("api.binance.options.underlyings[%d] (%s): at least one strike is required", i, u.Underlying)
+				}
+				for _, k := range u.Strikes {
+					if k <= 0 {
+						add("api.binance.options.underlyings[%d] (%s): strikes must be > 0 (got %g)", i, u.Underlying, k)
+					}
+				}
+				// must be priceable: either a live engine instrument or a static index
+				if u.IndexEngine != "" && !engine[u.IndexEngine] {
+					add("api.binance.options.underlyings[%d] (%s): index_engine %q is not a configured instrument", i, u.Underlying, u.IndexEngine)
+				}
+				if u.IndexEngine == "" && !(u.StaticIndex > 0) {
+					add("api.binance.options.underlyings[%d] (%s): set index_engine or a positive static_index", i, u.Underlying)
+				}
+			}
 		}
 	}
 	if cb := c.API.Coinbase; cb.Enabled {
