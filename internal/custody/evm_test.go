@@ -72,7 +72,9 @@ func TestEVMBalancesParsing(t *testing.T) {
 			result = "0x" + strings.Repeat("0", 58) + "16e360"
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + result + `"}`))
+		if _, err := w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + result + `"}`)); err != nil {
+			panic(err)
+		}
 	}))
 	defer ts.Close()
 

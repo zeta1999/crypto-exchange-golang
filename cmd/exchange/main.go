@@ -13,10 +13,13 @@ import (
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/account"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/binance"
+	"github.com/zeta1999/crypto-exchange-golang/internal/api/bybit"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/coinbase"
+	"github.com/zeta1999/crypto-exchange-golang/internal/api/deribit"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/fix"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/grpcserver"
 	"github.com/zeta1999/crypto-exchange-golang/internal/api/httpserver"
+	"github.com/zeta1999/crypto-exchange-golang/internal/api/okx"
 	wsadapter "github.com/zeta1999/crypto-exchange-golang/internal/api/ws"
 	"github.com/zeta1999/crypto-exchange-golang/internal/custody"
 	"github.com/zeta1999/crypto-exchange-golang/internal/emulator"
@@ -198,6 +201,17 @@ func main() {
 		}
 	}
 
+	optCfg, optOn := cfg.EffectiveOptions()
+	var optBook *optmarket.Market
+	if optOn {
+		var err error
+		optBook, err = buildOptionsMarket(optCfg, eng)
+		if err != nil {
+			log.Fatalf("options market: %v", err)
+		}
+		log.Printf("options book: %d instruments", len(optBook.Instruments()))
+	}
+
 	// Optional Binance-spot-compatible REST edge (Phase 8, a documented
 	// SUBSET). Additive and gated behind cfg.API.Binance.Enabled.
 	if cfg.API.Binance.Enabled {
@@ -227,11 +241,9 @@ func main() {
 		if apiFillDelay != nil {
 			opts = append(opts, binance.WithFillDelay(apiFillDelay))
 		}
-		if om, err := buildOptionsMarket(bcfg.Options, eng); err != nil {
-			log.Fatalf("options market (EAPI): %v", err)
-		} else if om != nil {
-			opts = append(opts, binance.WithOptionsMarket(om))
-			log.Printf("Binance options (EAPI) surface enabled: %d instruments", len(om.Instruments()))
+		if optBook != nil && optCfg.Serves("binance") {
+			opts = append(opts, binance.WithOptionsMarket(optBook))
+			log.Printf("Binance options (EAPI) surface enabled: %d instruments", len(optBook.Instruments()))
 		}
 		binanceSrv := binance.New(newMeteredEngine(eng, ordersPlaced, "binance"), symbolMap, authn, registry, opts...)
 		binanceSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking
@@ -242,6 +254,31 @@ func main() {
 			}
 			return nil
 		})
+	}
+
+	if optBook != nil {
+		for _, venue := range optCfg.Venues {
+			venue := venue
+			var serve func(context.Context, string, *optmarket.Market) error
+			switch venue.Name {
+			case "deribit":
+				serve = deribit.ListenAndServe
+			case "okx":
+				serve = okx.ListenAndServe
+			case "bybit":
+				serve = bybit.ListenAndServe
+			default:
+				continue
+			}
+			group.Go(func() error {
+				log.Printf("%s options listening on %s", venue.Name, venue.Listen)
+				err := serve(ctx, venue.Listen, optBook)
+				if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, http.ErrServerClosed) {
+					return err
+				}
+				return nil
+			})
+		}
 	}
 
 	// Optional FIX 4.4 acceptor edge (CR-8): order entry + market-data /
@@ -474,6 +511,9 @@ func buildOptionsMarket(cfg config.OptionsConfig, eng *engine.Engine) (*optmarke
 	m := optmarket.NewMarket(time.Now, index, cfg.Rate, cfg.IVSpread, cfg.BookHalfSpread, cfg.PriceBand)
 	for _, u := range cfg.Underlyings {
 		m.SetSurface(u.Underlying, optmarket.VolSurface{ATMVol: u.ATMVol, Skew: u.Skew, Smile: u.Smile})
+		if u.DividendYield != 0 {
+			m.SetDividendYield(u.Underlying, u.DividendYield)
+		}
 		for _, exp := range u.Expiries {
 			date, err := time.Parse("2006-01-02", exp)
 			if err != nil {

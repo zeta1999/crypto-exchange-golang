@@ -13,7 +13,7 @@ import (
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	conn, err := grpc.DialContext(ctx, "localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("dial grpc: %v", err)
 	}
@@ -78,5 +78,7 @@ func main() {
 		log.Fatalf("send cancel: %v", err)
 	}
 	time.Sleep(3 * time.Second)
-	stream.CloseSend()
+	if err := stream.CloseSend(); err != nil {
+		log.Printf("close send: %v", err)
+	}
 }

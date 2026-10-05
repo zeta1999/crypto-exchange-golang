@@ -172,7 +172,9 @@ func DialExample(addr, token string, connFactory func(urlStr string) (*websocket
 	if err := conn.WriteJSON(payload); err != nil {
 		return err
 	}
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return err
+	}
 	_, _, err = conn.ReadMessage()
 	return err
 }

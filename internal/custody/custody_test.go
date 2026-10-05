@@ -105,7 +105,9 @@ func TestKeystoreRejectsWeakKDF(t *testing.T) {
 // tx is reported as an error, not a fake success with an empty ref.
 func TestStellarFaucetEmptyBodyErrors(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"detail":"account already funded"}`))
+		if _, err := w.Write([]byte(`{"detail":"account already funded"}`)); err != nil {
+			panic(err)
+		}
 	}))
 	defer ts.Close()
 	s := NewStellar()

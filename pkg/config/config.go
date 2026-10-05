@@ -52,6 +52,10 @@ type Config struct {
 	API         APIConfig      `yaml:"api"`
 	Metrics     Metrics        `yaml:"metrics"`
 	Transfer    TransferConfig `yaml:"transfer"`
+	// Options is the shared options book. api.binance.options remains a read
+	// alias: when this block is disabled, the Binance block is the book and
+	// the only venue is Binance.
+	Options OptionsConfig `yaml:"options"`
 }
 
 // TransferConfig configures the on-chain transfer flow: an arb bot can withdraw
@@ -119,9 +123,10 @@ type BinanceConfig struct {
 	Options OptionsConfig `yaml:"options"`
 }
 
-// OptionsConfig configures the Binance-EAPI-compatible options MARKET DATA
-// surface (CR-9): GET /eapi/v1/{exchangeInfo,mark,depth,index}. Data only — no
-// options order entry. Disabled by default.
+// OptionsConfig configures the shared options book. Market data only — no
+// options order entry. Disabled by default. Venues publish that one book.
+// An empty Venues list means Binance only, which is what api.binance.options
+// already meant.
 type OptionsConfig struct {
 	Enabled        bool               `yaml:"enabled"`
 	Rate           float64            `yaml:"rate"`             // risk-free rate (cont. comp.)
@@ -129,6 +134,43 @@ type OptionsConfig struct {
 	BookHalfSpread float64            `yaml:"book_half_spread"` // synthetic-book half-spread, frac of mark
 	PriceBand      float64            `yaml:"price_band"`       // high/low price-limit band, frac of mark
 	Underlyings    []OptionUnderlying `yaml:"underlyings"`
+	Venues         []VenueConfig      `yaml:"venues"`
+}
+
+// VenueConfig names one public options venue. Binance is served on the
+// Binance edge. Deribit, OKX, and Bybit each need Listen.
+type VenueConfig struct {
+	Name   string `yaml:"name"` // binance | deribit | okx | bybit
+	Listen string `yaml:"listen"`
+}
+
+// Serves reports whether this book should be published on venue.
+func (o OptionsConfig) Serves(name string) bool {
+	for _, v := range o.Venues {
+		if v.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// EffectiveOptions is the book to build. A top-level options block wins.
+// Otherwise api.binance.options is the alias and the venue list is Binance.
+func (c *Config) EffectiveOptions() (OptionsConfig, bool) {
+	var src OptionsConfig
+	switch {
+	case c.Options.Enabled:
+		src = c.Options
+	case c.API.Binance.Options.Enabled:
+		src = c.API.Binance.Options
+	default:
+		return OptionsConfig{}, false
+	}
+	if len(src.Venues) == 0 {
+		src.Venues = []VenueConfig{{Name: "binance"}}
+	}
+	src.Enabled = true
+	return src, true
 }
 
 // OptionUnderlying defines a per-underlying option chain + vol surface. Strikes ×
@@ -136,16 +178,17 @@ type OptionsConfig struct {
 // instrument IndexEngine (spot mid); StaticIndex is the fallback when that book
 // is empty (e.g. a no-emulator preset).
 type OptionUnderlying struct {
-	Underlying  string    `yaml:"underlying"`   // EAPI underlying, e.g. "BTCUSDT"
-	Coin        string    `yaml:"coin"`         // symbol prefix, e.g. "BTC"
-	Quote       string    `yaml:"quote"`        // cash-settle asset, e.g. "USDT"
-	IndexEngine string    `yaml:"index_engine"` // engine instrument for spot mid, e.g. "BTC-USD"
-	StaticIndex float64   `yaml:"static_index"` // fallback fixed index when no book
-	ATMVol      float64   `yaml:"atm_vol"`
-	Skew        float64   `yaml:"skew"`
-	Smile       float64   `yaml:"smile"`
-	Expiries    []string  `yaml:"expiries"` // "YYYY-MM-DD" (settles 08:00 UTC)
-	Strikes     []float64 `yaml:"strikes"`
+	Underlying    string    `yaml:"underlying"`   // EAPI underlying, e.g. "BTCUSDT"
+	Coin          string    `yaml:"coin"`         // symbol prefix, e.g. "BTC"
+	Quote         string    `yaml:"quote"`        // cash-settle asset, e.g. "USDT"
+	IndexEngine   string    `yaml:"index_engine"` // engine instrument for spot mid, e.g. "BTC-USD"
+	StaticIndex   float64   `yaml:"static_index"` // fallback fixed index when no book
+	ATMVol        float64   `yaml:"atm_vol"`
+	Skew          float64   `yaml:"skew"`
+	Smile         float64   `yaml:"smile"`
+	DividendYield float64   `yaml:"dividend_yield"` // 0 for crypto; equity sets a yield
+	Expiries      []string  `yaml:"expiries"`       // "YYYY-MM-DD" (settles 08:00 UTC)
+	Strikes       []float64 `yaml:"strikes"`
 }
 
 // SymbolPair maps a Binance symbol ("BTCUSDT") to an engine instrument
@@ -403,34 +446,12 @@ func (c *Config) validateAPI(engine map[string]bool, add func(string, ...interfa
 		if b.Burst < 0 {
 			add("api.binance.burst must be >= 0")
 		}
-		if o := b.Options; o.Enabled {
-			if len(o.Underlyings) == 0 {
-				add("api.binance.options.underlyings must list at least one underlying when enabled")
-			}
-			for i, u := range o.Underlyings {
-				if u.Underlying == "" || u.Coin == "" || u.Quote == "" {
-					add("api.binance.options.underlyings[%d]: underlying, coin and quote are required", i)
-				}
-				if len(u.Expiries) == 0 {
-					add("api.binance.options.underlyings[%d] (%s): at least one expiry is required", i, u.Underlying)
-				}
-				if len(u.Strikes) == 0 {
-					add("api.binance.options.underlyings[%d] (%s): at least one strike is required", i, u.Underlying)
-				}
-				for _, k := range u.Strikes {
-					if k <= 0 {
-						add("api.binance.options.underlyings[%d] (%s): strikes must be > 0 (got %g)", i, u.Underlying, k)
-					}
-				}
-				// must be priceable: either a live engine instrument or a static index
-				if u.IndexEngine != "" && !engine[u.IndexEngine] {
-					add("api.binance.options.underlyings[%d] (%s): index_engine %q is not a configured instrument", i, u.Underlying, u.IndexEngine)
-				}
-				if u.IndexEngine == "" && !(u.StaticIndex > 0) {
-					add("api.binance.options.underlyings[%d] (%s): set index_engine or a positive static_index", i, u.Underlying)
-				}
-			}
+		if c.API.Binance.Options.Enabled && !c.Options.Enabled {
+			c.validateOptions(c.API.Binance.Options, "api.binance.options", engine, add)
 		}
+	}
+	if c.Options.Enabled {
+		c.validateOptions(c.Options, "options", engine, add)
 	}
 	if f := c.API.FIX; f.Enabled {
 		if strings.TrimSpace(f.Listen) == "" {
@@ -479,6 +500,49 @@ func (c *Config) validateAPI(engine map[string]bool, add func(string, ...interfa
 		}
 		if cb.Burst < 0 {
 			add("api.coinbase.burst must be >= 0")
+		}
+	}
+}
+
+func (c *Config) validateOptions(o OptionsConfig, prefix string, engine map[string]bool, add func(string, ...interface{})) {
+	if len(o.Underlyings) == 0 {
+		add("%s.underlyings must list at least one underlying when enabled", prefix)
+	}
+	for i, u := range o.Underlyings {
+		if u.Underlying == "" || u.Coin == "" || u.Quote == "" {
+			add("%s.underlyings[%d]: underlying, coin and quote are required", prefix, i)
+		}
+		if len(u.Expiries) == 0 {
+			add("%s.underlyings[%d] (%s): at least one expiry is required", prefix, i, u.Underlying)
+		}
+		if len(u.Strikes) == 0 {
+			add("%s.underlyings[%d] (%s): at least one strike is required", prefix, i, u.Underlying)
+		}
+		for _, k := range u.Strikes {
+			if k <= 0 {
+				add("%s.underlyings[%d] (%s): strikes must be > 0 (got %g)", prefix, i, u.Underlying, k)
+			}
+		}
+		if u.IndexEngine != "" && !engine[u.IndexEngine] {
+			add("%s.underlyings[%d] (%s): index_engine %q is not a configured instrument", prefix, i, u.Underlying, u.IndexEngine)
+		}
+		if u.IndexEngine == "" && !(u.StaticIndex > 0) {
+			add("%s.underlyings[%d] (%s): set index_engine or a positive static_index", prefix, i, u.Underlying)
+		}
+	}
+	venues := o.Venues
+	if len(venues) == 0 {
+		venues = []VenueConfig{{Name: "binance"}}
+	}
+	for _, v := range venues {
+		switch v.Name {
+		case "binance":
+		case "deribit", "okx", "bybit":
+			if strings.TrimSpace(v.Listen) == "" {
+				add("%s.venues: %s requires listen", prefix, v.Name)
+			}
+		default:
+			add("%s.venues: unknown venue %q", prefix, v.Name)
 		}
 	}
 }

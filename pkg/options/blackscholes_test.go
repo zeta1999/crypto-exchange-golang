@@ -68,7 +68,7 @@ func TestBlackScholes_DegenerateInputsAreFiniteIntrinsic(t *testing.T) {
 	}
 	for _, c := range cases {
 		g := Compute(c.kind, c.s, c.k, c.tt, c.r, c.vol)
-		for _, x := range []float64{g.Price, g.Delta, g.Gamma, g.Vega, g.Theta} {
+		for _, x := range []float64{g.Price, g.Delta, g.Gamma, g.Vega, g.Theta, g.Rho} {
 			if math.IsNaN(x) || math.IsInf(x, 0) {
 				t.Fatalf("%s: non-finite greek in %+v", c.name, g)
 			}
@@ -82,5 +82,21 @@ func TestBlackScholes_NearExpiryFinite(t *testing.T) {
 	g := Compute(Call, 100, 105, 0.001, 0.04, 0.15)
 	if g.Price < 0 || math.IsNaN(g.Price) || math.IsInf(g.Gamma, 0) {
 		t.Fatalf("near-expiry not finite: %+v", g)
+	}
+}
+
+func TestComputeWithDividend_ZeroMatchesCompute(t *testing.T) {
+	for _, kind := range []Kind{Call, Put} {
+		a := Compute(kind, 100, 110, 0.5, 0.03, 0.30)
+		b := ComputeWithDividend(kind, 100, 110, 0.5, 0.03, 0, 0.30)
+		if a != b {
+			t.Fatalf("%s q=0 %+v != %+v", kind, a, b)
+		}
+		if kind == Call && !(a.Rho > 0) {
+			t.Fatalf("call rho %.6f", a.Rho)
+		}
+		if kind == Put && !(a.Rho < 0) {
+			t.Fatalf("put rho %.6f", a.Rho)
+		}
 	}
 }

@@ -8,6 +8,11 @@
 #   GET /eapi/v1/depth?symbol=...&limit=...   synthetic order book
 #   GET /eapi/v1/index?underlying=BTCUSDT     spot index
 #
+# The same book is also public market data on:
+#   Deribit  :8193  GET /api/v2/public/ticker?instrument_name=BTC-31DEC26-50000-C
+#   OKX      :8194  GET /api/v5/public/opt-summary?instId=BTC-USD-261231-50000-C
+#   Bybit    :8195  GET /v5/market/tickers?category=option&symbol=BTC-31DEC26-50000-C
+#
 # It is the oms-test preset + an options surface. Deterministic + offline:
 #   * emulator.enabled: false  -> the spot book is empty, so the options index
 #                                 uses the configured static_index (50000) rather
@@ -51,26 +56,49 @@ api:
       USD: "1000000"
       BTC: "10"
     options:
-      enabled: true
-      rate: 0.03              # risk-free rate (continuously compounded)
-      iv_spread: 0.02         # bid/ask IV half-spread (vol points)
-      book_half_spread: 0.02  # synthetic-book half-spread (fraction of mark)
-      price_band: 0.5         # high/low price-limit band (fraction of mark)
-      underlyings:
-        - underlying: "BTCUSDT"   # EAPI underlying / index pair
-          coin: "BTC"             # symbol prefix -> BTC-YYMMDD-STRIKE-{C|P}
-          quote: "USDT"           # cash-settlement asset
-          index_engine: "BTC-USD" # read spot mid here when the book is non-empty
-          static_index: 50000     # fallback when the spot book is empty (this preset)
-          atm_vol: 0.65
-          skew: -0.05
-          smile: 0.10
-          expiries:
-            - "2026-12-31"
-            - "2027-03-27"
-          strikes: [40000, 50000, 60000, 70000]
+      enabled: false  # alias of the top-level options book; leave off while that book is set
   coinbase:
     enabled: false
+options:
+  enabled: true
+  rate: 0.03
+  iv_spread: 0.02
+  book_half_spread: 0.02
+  price_band: 0.5
+  venues:
+    - name: binance
+    - name: deribit
+      listen: ":8193"
+    - name: okx
+      listen: ":8194"
+    - name: bybit
+      listen: ":8195"
+  underlyings:
+    - underlying: "BTCUSDT"
+      coin: "BTC"
+      quote: "USDT"
+      index_engine: "BTC-USD"
+      static_index: 50000
+      atm_vol: 0.65
+      skew: -0.05
+      smile: 0.10
+      dividend_yield: 0
+      expiries:
+        - "2026-12-31"
+        - "2027-03-27"
+      strikes: [40000, 50000, 60000, 70000]
+    - underlying: "ETHUSDT"
+      coin: "ETH"
+      quote: "USDT"
+      static_index: 3000
+      atm_vol: 0.65
+      skew: -0.05
+      smile: 0.10
+      dividend_yield: 0
+      expiries:
+        - "2026-12-31"
+        - "2027-03-27"
+      strikes: [2500, 3000, 3500, 4000]
 metrics:
   enabled: false
 emulator:

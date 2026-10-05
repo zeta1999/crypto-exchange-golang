@@ -64,8 +64,14 @@ func TestValidateOptionsTestYAML(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("options-test.yaml is invalid: %v", err)
 	}
-	if !cfg.API.Binance.Options.Enabled || len(cfg.API.Binance.Options.Underlyings) == 0 {
-		t.Fatal("options-test.yaml should enable an options surface")
+	book, ok := cfg.EffectiveOptions()
+	if !ok || len(book.Underlyings) != 2 {
+		t.Fatal("options-test.yaml should enable a BTC and ETH options book")
+	}
+	for _, name := range []string{"binance", "deribit", "okx", "bybit"} {
+		if !book.Serves(name) {
+			t.Fatalf("options-test.yaml should publish on %s", name)
+		}
 	}
 }
 

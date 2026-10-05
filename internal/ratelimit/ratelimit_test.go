@@ -49,8 +49,11 @@ func TestLimiterRefill(t *testing.T) {
 		t.Fatal("should be empty")
 	}
 	clk.Advance(200 * time.Millisecond) // +2 tokens
-	if !l.Allow() || !l.Allow() {
-		t.Fatal("expected 2 refilled tokens")
+	if !l.Allow() {
+		t.Fatal("expected the first refilled token")
+	}
+	if !l.Allow() {
+		t.Fatal("expected the second refilled token")
 	}
 	if l.Allow() {
 		t.Fatal("only 2 tokens should have refilled")
@@ -69,15 +72,21 @@ func TestLimiterDisabled(t *testing.T) {
 func TestKeyedIsolation(t *testing.T) {
 	clk := newFakeClock()
 	k := newKeyedLimiterClock(10, 2, time.Minute, clk.Now)
-	if !k.Allow("a") || !k.Allow("a") {
-		t.Fatal("key a burst denied")
+	if !k.Allow("a") {
+		t.Fatal("key a first burst token denied")
+	}
+	if !k.Allow("a") {
+		t.Fatal("key a second burst token denied")
 	}
 	if k.Allow("a") {
 		t.Fatal("key a should be exhausted")
 	}
 	// Different key has its own fresh bucket.
-	if !k.Allow("b") || !k.Allow("b") {
-		t.Fatal("key b should have its own bucket")
+	if !k.Allow("b") {
+		t.Fatal("key b first token denied")
+	}
+	if !k.Allow("b") {
+		t.Fatal("key b second token denied")
 	}
 }
 

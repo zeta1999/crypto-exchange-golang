@@ -22,7 +22,14 @@ func (s *Server) handleOptionExchangeInfo(w http.ResponseWriter, r *http.Request
 		writeError(w, errIllegalParam("method"))
 		return
 	}
-	writeJSON(w, s.optMarket.ExchangeInfo())
+	contracts := s.optMarket.Contracts()
+	now := int64(0)
+	if len(contracts) > 0 {
+		if spot, err := s.optMarket.Index(contracts[0].Underlying); err == nil {
+			now = spot.TimeMs
+		}
+	}
+	writeJSON(w, ProjectExchangeInfo(contracts, now))
 }
 
 // handleOptionMark: GET /eapi/v1/mark[?symbol=] — mark price + IV + greeks.
@@ -38,10 +45,10 @@ func (s *Server) handleOptionMark(w http.ResponseWriter, r *http.Request) {
 			writeError(w, errInvalidSymbol())
 			return
 		}
-		writeJSON(w, []optmarket.MarkData{md})
+		writeJSON(w, []MarkData{ProjectMark(md)})
 		return
 	}
-	writeJSON(w, s.optMarket.MarkAll())
+	writeJSON(w, ProjectMarks(s.optMarket.Marks()))
 }
 
 // handleOptionDepth: GET /eapi/v1/depth?symbol=&limit= — synthetic order book.
@@ -69,7 +76,7 @@ func (s *Server) handleOptionDepth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errInvalidSymbol())
 		return
 	}
-	writeJSON(w, d)
+	writeJSON(w, ProjectDepth(d))
 }
 
 // handleOptionIndex: GET /eapi/v1/index?underlying= — spot index for the pair.
@@ -88,5 +95,5 @@ func (s *Server) handleOptionIndex(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errInvalidSymbol())
 		return
 	}
-	writeJSON(w, idx)
+	writeJSON(w, ProjectIndex(idx))
 }

@@ -3,6 +3,8 @@ package binance
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -37,7 +39,7 @@ func TestEAPI_ExchangeInfo(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
-	var info optmarket.ExchangeInfo
+	var info ExchangeInfo
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,7 @@ func TestEAPI_MarkSingleAndAll(t *testing.T) {
 	// single symbol → 1-element array
 	resp := h.get(t, "/eapi/v1/mark?symbol=BTC-261231-50000-C")
 	defer resp.Body.Close()
-	var one []optmarket.MarkData
+	var one []MarkData
 	if err := json.NewDecoder(resp.Body).Decode(&one); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestEAPI_MarkSingleAndAll(t *testing.T) {
 	// all marks
 	respAll := h.get(t, "/eapi/v1/mark")
 	defer respAll.Body.Close()
-	var all []optmarket.MarkData
+	var all []MarkData
 	if err := json.NewDecoder(respAll.Body).Decode(&all); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +103,7 @@ func TestEAPI_Depth(t *testing.T) {
 	h := newHarness(t, WithOptionsMarket(optTestMarket()))
 	resp := h.get(t, "/eapi/v1/depth?symbol=BTC-261231-50000-C&limit=5")
 	defer resp.Body.Close()
-	var d optmarket.Depth
+	var d Depth
 	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +119,7 @@ func TestEAPI_Index(t *testing.T) {
 	h := newHarness(t, WithOptionsMarket(optTestMarket()))
 	resp := h.get(t, "/eapi/v1/index?underlying=BTCUSDT")
 	defer resp.Body.Close()
-	var idx optmarket.IndexData
+	var idx IndexData
 	if err := json.NewDecoder(resp.Body).Decode(&idx); err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +140,45 @@ func TestEAPI_UnknownSymbolErrors(t *testing.T) {
 			t.Errorf("%s: expected non-200 for unknown, got 200", path)
 		}
 		resp.Body.Close()
+	}
+}
+
+// Recorded golden: the full EAPI surface captured as a deterministic fixture.
+// q=0 must reproduce it byte for byte. Refresh with UPDATE_GOLDEN=1.
+func TestEAPI_GoldenSnapshot(t *testing.T) {
+	m := optTestMarket()
+	depth, err := m.Depth("BTC-261231-50000-C", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := m.Index("BTCUSDT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := map[string]any{
+		"exchangeInfo": ProjectExchangeInfo(m.Contracts(), idx.TimeMs),
+		"mark":         ProjectMarks(m.Marks()),
+		"depth":        ProjectDepth(depth),
+		"index":        ProjectIndex(idx),
+	}
+	got, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, '\n')
+	path := filepath.Join("..", "..", "..", "testdata", "optmarket", "eapi_snapshot.json")
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(path, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("EAPI golden mismatch (q=0 must match the recorded book):\n%s", got)
 	}
 }
 

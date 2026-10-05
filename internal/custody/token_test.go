@@ -56,7 +56,9 @@ func TestSolanaSPLBalanceParsing(t *testing.T) {
 		case "getTokenAccountsByOwner":
 			result = `{"value":[{"account":{"data":{"parsed":{"info":{"tokenAmount":{"amount":"1500000","decimals":6,"uiAmountString":"1.5"}}}}}}]}`
 		}
-		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":` + result + `}`))
+		if _, err := w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":` + result + `}`)); err != nil {
+			panic(err)
+		}
 	}))
 	defer ts.Close()
 
@@ -90,7 +92,9 @@ func TestSolanaSPLBalanceAbsent(t *testing.T) {
 		if req.Method == "getTokenAccountsByOwner" {
 			result = `{"value":[]}`
 		}
-		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":` + result + `}`))
+		if _, err := w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":` + result + `}`)); err != nil {
+			panic(err)
+		}
 	}))
 	defer ts.Close()
 	s := NewSolana()
