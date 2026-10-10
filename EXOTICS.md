@@ -100,11 +100,20 @@ All three mirror recorded inputs and goldens from the examples checkout
      Quote instead of resting (dealer quoting on inbound interest)
    - reused/expired/foreign-session quotes → Rejected. Quote table is TTL-pruned
      and capped (4096). Config: `api.fix.quotes{enabled,pricer,exotics,vol,
-     spread_bps,num_paths,quote_ttl}` (see configs/dev.yaml).
+     spread_bps,num_paths,quote_ttl}`; exotics are `api.fix.quotes.exotics[]`
+     entries `{engine, payoff | payoff_file, vol?, model?}` (see configs/dev.yaml).
    - `Quoter` is a 2-method interface the fix package owns; `cmd/exchange`
      supplies `fixQuoter`, the adapter that reads the **live engine book mid** as
-     spot, prices an ATM European via the registry saga pricer (C + P legs), and
-     quotes `S−K+put / S−K+call` (put-call parity ⇒ uncrossed) ± half spread.
+     spot and prices the exotic's **actual configured payoff** exactly once via
+     the registry saga pricer (per-exotic `payoff` inline Aria script or
+     `payoff_file`, with optional per-exotic `vol`/`model` overrides). The bid/
+     offer bracket that single fair value: `fair ∓ (spread_bps/10000)·fair` — the
+     spread is bps of fair value, so the pair is uncrossed by construction and
+     always tracks the exotic's own price (a barrier, Asian, autocall, etc. is
+     *not* decomposable into vanilla legs — no put-call-parity fabrication).
+     Strike/Side are cleared on the Price params so the pricer never falls back
+     to a vanilla payoff; a non-positive fair value is an error, not a free
+     instrument.
    - Verified: unit (mock quoter: z→S, quoted-D→NEW at quoted price resting on the
      book, double-execute → Rejected, plain-D-on-exotic → S, quoter-failure →
      reject, no-quoter → BusinessReject) + **live smoke** (`TestManualSmoke`,

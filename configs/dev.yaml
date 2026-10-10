@@ -18,6 +18,9 @@ instruments:
   - symbol: "ETH-USD"
     base: "ETH"
     quote: "USD"
+  - symbol: "BTC-EXOT-C"      # quote-only flow exotic (see api.fix.quotes); empty book holds quoted confirms
+    base: "BTC"
+    quote: "USD"
 storage:
   wal_path: "data/exchange.wal"
 # Binance-spot-compatible REST edge (PLAN Phase 8 — a documented SUBSET). When
@@ -62,11 +65,14 @@ api:
       - "ETH-USD"
   # FIX 4.4 acceptor edge (CR-8): order entry + market-data liquidity search,
   # and — with `quotes` — quote-driven OTC order entry for flow exotics. The
-  # saga pricer plugin prices each exotic as a European vanilla from the live
-  # book mid; clients: quote via 35=z → get 35=S, confirm via 35=D with
-  # QuotedOrderFlag=Y (692) + OrderID=117, or just send a plain D on an exotic
-  # symbol and get a fresh quote back. Requires ../price-master-examples
-  # (bin/reassemble.sh once) for the saga binary. Disabled by default.
+  # saga pricer plugin prices each exotic's ACTUAL configured payoff (an
+  # inline Aria script or a payoff_file path, e.g.
+  # `payoffs/barrier_down_out_call.aria`) at the live book mid; bid =
+  # fair·(1−w) and offer = fair·(1+w) where w = spread_bps/10000. Clients:
+  # quote via 35=z → get 35=S, confirm via 35=D with QuotedOrderFlag=Y (692)
+  # + OrderID=117, or just send a plain D on an exotic symbol and get a fresh
+  # quote back. Requires ../price-master-examples (bin/reassemble.sh once)
+  # for the saga binary. Disabled by default.
   fix:
     enabled: false
     listen: ":8193"
@@ -74,15 +80,30 @@ api:
     symbols:
       - binance: "BTCUSDT"
         engine: "BTC-USD"
+      # Quote-only exotic. Not a funded instrument — no entry in the
+      # top-level instruments: list; it trades only via the quote flow. The
+      # engine symbol is referenced by quotes.exotics[].engine below.
+      - binance: "BTC-EXOT-C"
+        engine: "BTC-EXOT-C"
     quotes:
       enabled: false
       pricer: "saga"           # registered pricer backend
-      exotics:                 # engine instruments that trade ONLY via quote
-        - "BTC-EXOT"
+      exotics:                 # each entry = engine symbol + its ACTUAL payoff + model knobs
+        - engine: "BTC-EXOT-C"
+          payoff_file: "payoffs/barrier_down_out_call.aria"   # down-and-out call (K=100, B=80)
+          vol: 0.30                                    # pricing vol; per-exotic .vol overrides the shared quotes.vol
+          # Alternatively, an inline Aria contract (exactly one of payoff /
+          # payoff_file must be set per exotic):
+          # payoff: |
+          #   contract DownAndOutCall { let S = spot("X") var alive = 1.0
+          #     alive := alive * cond(S > 80.0, 1.0, 0.0)
+          #     one(KRW) |> scale(alive * max(S - 100.0, 0.0)) |> when(2026-01-01) }
       spot_from:               # exotic -> engine instrument whose book mid is the pricing spot (default: the exotic's own book)
-        "BTC-EXOT": "BTC-USD"
-      vol: 0.30                # pricing vol (annualized)
-      spread_bps: 10           # half-spread per side, bps of spot (0 => 10)
+        "BTC-EXOT-C": "BTC-USD"
+      vol: 0.30                # default pricing vol (annualized); per-exotic .vol overrides
+      # rate: 0.05             # risk-free rate (annualized); 0 = backend default
+      # expiry_years: 1.0      # default T in years; 0 => 1.0
+      spread_bps: 10           # quote half-spread per side, bps of fair value (0 => 10)
       num_paths: 65536
       num_steps: 252
       seed: 42

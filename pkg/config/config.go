@@ -110,20 +110,36 @@ type FIXConfig struct {
 }
 
 // FIXQuotesConfig configures the quote flow (35=z/S, QuotedOrderFlag confirm).
-// Exotics lists engine instrument names that trade ONLY via quote (no direct
-// book entry). Vol/NumPaths/Seed are the pricing model knobs; Spot is read
-// live from the engine book mid.
+// Each exotic trades ONLY via quote (no direct book entry) and is priced by
+// the registered backend against its ACTUAL payoff — not synthesized from
+// vanilla legs. Spot is read live from the engine book mid (see SpotFrom);
+// Vol/NumPaths/NumSteps/Seed are per-exotic shared model knobs.
 type FIXQuotesConfig struct {
 	Enabled   bool              `yaml:"enabled"`
 	Pricer    string            `yaml:"pricer"` // registered pricer name, "saga"
-	Exotics   []string          `yaml:"exotics"`
-	SpotFrom  map[string]string `yaml:"spot_from"` // exotic engine sym -> engine sym whose book mid is the pricing spot (default = the exotic itself)
-	Vol       float64           `yaml:"vol"`
-	SpreadBps float64           `yaml:"spread_bps"` // half-spread per side in bps; 0 → 10
+	Exotics   []FIXExotic       `yaml:"exotics"`
+	SpotFrom  map[string]string `yaml:"spot_from"`    // exotic engine sym -> engine sym whose book mid is the pricing spot (default = the exotic itself)
+	Vol       float64           `yaml:"vol"`          // default pricing vol (annualized)
+	Rate      float64           `yaml:"rate"`         // risk-free rate (annualized); 0 = backend default
+	ExpiryYrs float64           `yaml:"expiry_years"` // default T in years; 0 → 1.0
+	SpreadBps float64           `yaml:"spread_bps"`   // quote half-spread per side, bps of the exotic's fair value; 0 → 10
 	NumPaths  int               `yaml:"num_paths"`
 	NumSteps  int               `yaml:"num_steps"`
 	Seed      int64             `yaml:"seed"`
 	QuoteTTL  string            `yaml:"quote_ttl"` // duration string, e.g. "5m"
+}
+
+// FIXExotic is one quote-only engine instrument and the PAYOFF the registered
+// pricer prices it with. Exactly one of Payoff / PayoffFile should be set: an
+// inline Aria script (Payoff) or a file relative to the saga checkout root
+// (PayoffFile, e.g. "payoffs/barrier_down_out_call.aria"). Vol and Model, when
+// set, override the shared FIXQuotesConfig values for this instrument only.
+type FIXExotic struct {
+	Engine     string  `yaml:"engine"`
+	Payoff     string  `yaml:"payoff,omitempty"`      // inline Aria script
+	PayoffFile string  `yaml:"payoff_file,omitempty"` // .aria path relative to the saga root
+	Vol        float64 `yaml:"vol,omitempty"`         // per-exotic vol override
+	Model      string  `yaml:"model,omitempty"`       // per-exotic model override
 }
 
 // BinanceConfig configures the Binance-spot-compatible REST edge (PLAN Phase
@@ -486,13 +502,23 @@ func (c *Config) validateAPI(engine map[string]bool, add func(string, ...interfa
 		if len(f.Symbols) == 0 {
 			add("api.fix.symbols must map at least one symbol when enabled")
 		}
+		// A quote-only exotic has no funded book; it's configured under
+		// api.fix.quotes.exotics[].engine. Allow the engine symbol to be
+		// EITHER a funded instrument (order-entry / market-data edge) OR a
+		// known quote-only exotic.
+		exoticEngines := map[string]bool{}
+		if f.Quotes != nil {
+			for _, e := range f.Quotes.Exotics {
+				exoticEngines[e.Engine] = true
+			}
+		}
 		for _, sp := range f.Symbols {
 			if sp.Binance == "" || sp.Engine == "" {
 				add("api.fix.symbols: each entry needs both a fix symbol and an engine instrument")
 				continue
 			}
-			if !engine[sp.Engine] {
-				add("api.fix.symbols: engine %q is not a configured instrument", sp.Engine)
+			if !engine[sp.Engine] && !exoticEngines[sp.Engine] {
+				add("api.fix.symbols: engine %q is neither a configured instrument nor a quote-only exotic", sp.Engine)
 			}
 		}
 	}

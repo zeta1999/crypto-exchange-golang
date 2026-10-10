@@ -32,8 +32,9 @@ Binance EAPI + Deribit/OKX/Bybit-compatible public shapes (`optmarket` + per-ven
 (`../price-master-examples`; portable-RNG reproducible; barrier/Asian/autocall payoffs via
 `.aria` scripts); demo in `cmd/examples-pricer`, goldens within the examples harness's 1e-3
 tolerance. **Flow-exotics order entry (CR-10):** quote-driven OTC over the FIX
-4.4 acceptor — `QuoteRequest` (z) → `Quoter` (saga-priced ATM vanilla off the
-live book mid, put-call-parity quoted pair) → `Quote` (S); confirmation via
+4.4 acceptor — `QuoteRequest` (z) → `Quoter` (saga-prices the exotic's actual
+configured payoff once, off the live book mid; bid/offer bracket the fair
+value by spread bps) → `Quote` (S); confirmation via
 `NewOrderSingle` QuotedOrderFlag=Y (692) + OrderID=QuoteID executes at the
 quoted price (single-use, TTL-capped table), plain D on a quote-only
 instrument gets a fresh quote, reuse → Rejected. Unit + live smoke green.

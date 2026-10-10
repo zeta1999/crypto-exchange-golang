@@ -148,7 +148,7 @@ func TestValidateInvalid(t *testing.T) {
 		}, "fix.symbols"},
 		{"fix bad engine", func(c *Config) {
 			c.API.FIX = FIXConfig{Enabled: true, Listen: ":8195", SenderCompID: "M", Symbols: []SymbolPair{{Binance: "BTCUSDT", Engine: "NOPE"}}}
-		}, "not a configured instrument"},
+		}, "neither a configured instrument nor a quote-only exotic"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -297,7 +297,8 @@ func main() {
 		fixSrv.AttachHooks(book)
 
 		// Optional quote-driven OTC order entry (flow exotics): the saga
-		// pricer plugin prices a European vanilla per exotic instrument; the
+		// pricer plugin prices each exotic's ACTUAL configured payoff
+		// (inline Aria script or payoff_file) at the live book mid; the
 		// FIX edge answers z→S, executes QuotedOrderFlag=Y confirmations at
 		// the quoted price, and auto-quotes plain D on exotic symbols.
 		if qcfg := fcfg.Quotes; qcfg != nil && qcfg.Enabled {
@@ -310,13 +311,36 @@ func main() {
 			if numPaths <= 0 {
 				numPaths = 65536
 			}
-			model := pricer.Params{
-				Vol: qcfg.Vol, NumPaths: numPaths,
-				NumSteps: qcfg.NumSteps, Seed: qcfg.Seed,
-				ExpiryYears: 1.0,  // per-leg T; ATM at the live mid
-				Model:       "bs", // pricing model for the saga backend
+			expiry := qcfg.ExpiryYrs
+			if expiry <= 0 {
+				expiry = 1.0
 			}
-			q := newFixQuoter(reg, qcfg.Pricer, book, qcfg.Exotics, qcfg.SpotFrom, qcfg.SpreadBps, model)
+			model := pricer.Params{
+				Vol:         qcfg.Vol,
+				Rate:        qcfg.Rate,
+				NumPaths:    numPaths,
+				NumSteps:    qcfg.NumSteps,
+				Seed:        qcfg.Seed,
+				ExpiryYears: expiry,
+			}
+			q, err := newFixQuoter(reg, qcfg.Pricer, book, qcfg.Exotics, qcfg.SpotFrom, qcfg.SpreadBps, model)
+			if err != nil {
+				log.Fatalf("fix quotes: %v", err)
+			}
+			if qcfg.Vol <= 0 && len(qcfg.Exotics) > 0 {
+				// Per-exotic vol overrides are allowed, but at least one
+				// vol must be > 0 for the default bs/dupire models.
+				anyVol := false
+				for _, e := range qcfg.Exotics {
+					if e.Vol > 0 {
+						anyVol = true
+						break
+					}
+				}
+				if !anyVol {
+					log.Fatalf("fix quotes: vol must be > 0 (shared vol or each exotic's vol)")
+				}
+			}
 			if ttl := qcfg.QuoteTTL; ttl != "" {
 				if d, err := time.ParseDuration(ttl); err == nil {
 					fixSrv.SetQuoteTTL(d)
@@ -325,7 +349,12 @@ func main() {
 				}
 			}
 			fixSrv.SetQuoter(q)
-			log.Printf("FIX quotes: pricer=%s exotics=%v spread=%.1fbps", qcfg.Pricer, qcfg.Exotics, qcfg.SpreadBps)
+			names := make([]string, 0, len(qcfg.Exotics))
+			for _, e := range qcfg.Exotics {
+				names = append(names, e.Engine)
+			}
+			log.Printf("FIX quotes: pricer=%s exotics=%v spread=%.1fbps vol=%.3f T=%.2fy",
+				qcfg.Pricer, names, qcfg.SpreadBps, qcfg.Vol, expiry)
 		}
 
 		group.Go(func() error {
