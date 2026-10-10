@@ -101,6 +101,29 @@ type FIXConfig struct {
 	Listen       string       `yaml:"listen"`
 	SenderCompID string       `yaml:"sender_comp_id"`
 	Symbols      []SymbolPair `yaml:"symbols"`
+	// Quotes enables quote-driven OTC order entry (flow exotics) via the
+	// Pricer plugin. Pricer names the registered pricing backend ("saga");
+	// Exotics lists engine instruments that trade ONLY via quote — a
+	// NewOrderSingle on one is answered with a Quote (35=S), and
+	// QuoteRequest (35=z) always works.
+	Quotes *FIXQuotesConfig `yaml:"quotes,omitempty"`
+}
+
+// FIXQuotesConfig configures the quote flow (35=z/S, QuotedOrderFlag confirm).
+// Exotics lists engine instrument names that trade ONLY via quote (no direct
+// book entry). Vol/NumPaths/Seed are the pricing model knobs; Spot is read
+// live from the engine book mid.
+type FIXQuotesConfig struct {
+	Enabled   bool              `yaml:"enabled"`
+	Pricer    string            `yaml:"pricer"` // registered pricer name, "saga"
+	Exotics   []string          `yaml:"exotics"`
+	SpotFrom  map[string]string `yaml:"spot_from"` // exotic engine sym -> engine sym whose book mid is the pricing spot (default = the exotic itself)
+	Vol       float64           `yaml:"vol"`
+	SpreadBps float64           `yaml:"spread_bps"` // half-spread per side in bps; 0 → 10
+	NumPaths  int               `yaml:"num_paths"`
+	NumSteps  int               `yaml:"num_steps"`
+	Seed      int64             `yaml:"seed"`
+	QuoteTTL  string            `yaml:"quote_ttl"` // duration string, e.g. "5m"
 }
 
 // BinanceConfig configures the Binance-spot-compatible REST edge (PLAN Phase

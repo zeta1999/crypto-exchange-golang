@@ -61,6 +61,11 @@ type Server struct {
 	senderCompID string
 	depth        int // default market-data depth
 
+	quoter   Quoter // nil = quote flow disabled
+	quotes   map[string]*quoteRec
+	quoteSeq int64
+	quoteTTL time.Duration
+
 	mu       sync.Mutex
 	sessions map[*Session]*sessState
 	byEngine map[string]*ordRec // engineID -> order (cross-session fill routing)
@@ -78,7 +83,18 @@ func NewServer(engine Engine, resolve SymbolResolver, senderCompID string, now f
 		now: now, senderCompID: senderCompID, depth: 20,
 		sessions: map[*Session]*sessState{},
 		byEngine: map[string]*ordRec{},
+		quotes:   map[string]*quoteRec{},
+		quoteTTL: defaultQuoteTTL,
 	}
+}
+
+// SetQuoteTTL overrides how long a stored quote stays confirmable (default 5m).
+func (s *Server) SetQuoteTTL(d time.Duration) {
+	s.mu.Lock()
+	if d > 0 {
+		s.quoteTTL = d
+	}
+	s.mu.Unlock()
 }
 
 // Accept runs a FIX session over conn until it closes. Blocking; call per conn.
@@ -170,6 +186,20 @@ func (s *Server) OnNewOrderSingle(sess *Session, m *Message) {
 		return
 	}
 
+	// Quote-driven flow (OTC / flow exotics):
+	//   - QuotedOrderFlag=Y (692): this D confirms a stored Quote (its 117
+	//     arrives in OrderID 37) — execute AT THE QUOTED PRICE, once.
+	//   - plain D on an exotic instrument: order interest gets answered with
+	//     a fresh Quote rather than a resting order.
+	if flag, _ := m.Get(TagQuotedOrderFlag); flag == "Y" {
+		s.executeQuoted(sess, m, clOrdID, fixSym, engSym, side, qty)
+		return
+	}
+	if s.quoter != nil && s.quoter.IsExotic(engSym) {
+		s.quote(sess, "", clOrdID, fixSym, engSym, side, qtyStr, qty)
+		return
+	}
+
 	// Idempotency: a duplicate ClOrdID on the same session is rejected, never a
 	// second resting order (the FIX analogue of CR-5's place-time idempotency).
 	s.mu.Lock()
@@ -217,6 +247,46 @@ func (s *Server) OnNewOrderSingle(sess *Session, m *Message) {
 	if err != nil {
 		s.finishReject(rec, "engine rejected: "+err.Error())
 	}
+}
+
+func (s *Server) OnQuoteRequest(sess *Session, m *Message) {
+	reqID, _ := m.Get(TagQuoteReqID)
+	fixSym, _ := m.Get(TagSymbol)
+	side, _ := m.Get(TagSide)
+	qtyStr, _ := m.Get(TagOrderQty)
+
+	if s.quoter == nil {
+		s.quoteReject(sess, reqID, fixSym, side, "quote flow not enabled")
+		return
+	}
+	engSym, ok := s.resolve(fixSym)
+	if !ok {
+		s.quoteReject(sess, reqID, fixSym, side, "unknown symbol "+fixSym)
+		return
+	}
+	if _, ok := fixSideToEngine(side); !ok {
+		s.quoteReject(sess, reqID, fixSym, side, "bad Side "+side)
+		return
+	}
+	qty, err := decimal.Parse(qtyStr)
+	if err != nil || qty.Sign() <= 0 {
+		s.quoteReject(sess, reqID, fixSym, side, "bad OrderQty "+qtyStr)
+		return
+	}
+	s.quote(sess, reqID, "", fixSym, engSym, side, qtyStr, qty)
+}
+
+// quoteReject answers a QuoteRequest it cannot price (FIX BusinessReject,
+// referenced to 35=z).
+func (s *Server) quoteReject(sess *Session, reqID, fixSym, side, text string) {
+	rj := NewMessage(MsgBusinessReject)
+	rj.Set(TagRefMsgType, MsgQuoteRequest)
+	rj.Set(TagSymbol, fixSym)
+	if reqID != "" {
+		rj.Set(TagQuoteReqID, reqID)
+	}
+	rj.Set(TagText, text)
+	_ = sess.Send(rj)
 }
 
 func (s *Server) OnOrderCancelRequest(sess *Session, m *Message) {

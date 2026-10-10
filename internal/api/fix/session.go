@@ -24,6 +24,9 @@ type Application interface {
 	OnOrderCancelRequest(s *Session, m *Message)
 	OnOrderCancelReplace(s *Session, m *Message)
 	OnMarketDataRequest(s *Session, m *Message)
+	// OnQuoteRequest handles the OTC/flow quote flow (MsgType z); a no-op is
+	// fine until a quoter is attached (the server then answers itself).
+	OnQuoteRequest(s *Session, m *Message)
 }
 
 // Session is one FIX 4.4 connection (acceptor side). It frames messages off the
@@ -201,7 +204,7 @@ func (s *Session) handle(m *Message) (done bool, err error) {
 		s.sendLogout("responding to logout")
 		s.app.OnLogout(s)
 		return true, nil
-	case MsgNewOrderSingle, MsgOrderCancelReq, MsgOrderCancelRepl, MsgMarketDataReq:
+	case MsgNewOrderSingle, MsgOrderCancelReq, MsgOrderCancelRepl, MsgMarketDataReq, MsgQuoteRequest:
 		if ve := s.dict.Validate(m); ve != nil {
 			s.sendReject(seq, ve)
 			return false, nil
@@ -295,5 +298,7 @@ func (s *Session) dispatch(m *Message) {
 		s.app.OnOrderCancelReplace(s, m)
 	case MsgMarketDataReq:
 		s.app.OnMarketDataRequest(s, m)
+	case MsgQuoteRequest:
+		s.app.OnQuoteRequest(s, m)
 	}
 }

@@ -60,6 +60,33 @@ api:
     products:                  # allow-list of product IDs (== engine instruments)
       - "BTC-USD"
       - "ETH-USD"
+  # FIX 4.4 acceptor edge (CR-8): order entry + market-data liquidity search,
+  # and — with `quotes` — quote-driven OTC order entry for flow exotics. The
+  # saga pricer plugin prices each exotic as a European vanilla from the live
+  # book mid; clients: quote via 35=z → get 35=S, confirm via 35=D with
+  # QuotedOrderFlag=Y (692) + OrderID=117, or just send a plain D on an exotic
+  # symbol and get a fresh quote back. Requires ../price-master-examples
+  # (bin/reassemble.sh once) for the saga binary. Disabled by default.
+  fix:
+    enabled: false
+    listen: ":8193"
+    sender_comp_id: "MIRAGE"
+    symbols:
+      - binance: "BTCUSDT"
+        engine: "BTC-USD"
+    quotes:
+      enabled: false
+      pricer: "saga"           # registered pricer backend
+      exotics:                 # engine instruments that trade ONLY via quote
+        - "BTC-EXOT"
+      spot_from:               # exotic -> engine instrument whose book mid is the pricing spot (default: the exotic's own book)
+        "BTC-EXOT": "BTC-USD"
+      vol: 0.30                # pricing vol (annualized)
+      spread_bps: 10           # half-spread per side, bps of spot (0 => 10)
+      num_paths: 65536
+      num_steps: 252
+      seed: 42
+      quote_ttl: "5m"
 # Prometheus-text metrics endpoint. When enabled, a dedicated unauthenticated
 # HTTP listener serves /metrics (conventional for a scrape endpoint). The
 # emulator pipeline and API edges register their counters/gauges here.

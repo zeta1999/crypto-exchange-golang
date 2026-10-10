@@ -28,6 +28,8 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/metrics"
 	"github.com/zeta1999/crypto-exchange-golang/internal/optmarket"
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
+	"github.com/zeta1999/crypto-exchange-golang/internal/pricer"
+	"github.com/zeta1999/crypto-exchange-golang/internal/pricer/saga"
 	"github.com/zeta1999/crypto-exchange-golang/internal/ratelimit"
 	"github.com/zeta1999/crypto-exchange-golang/internal/transfer"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/auth"
@@ -293,6 +295,39 @@ func main() {
 		resolve := func(sym string) (string, bool) { es, ok := fixSyms[sym]; return es, ok }
 		fixSrv := fix.NewServer(newMeteredEngine(eng, ordersPlaced, "fix"), resolve, fcfg.SenderCompID, nil)
 		fixSrv.AttachHooks(book)
+
+		// Optional quote-driven OTC order entry (flow exotics): the saga
+		// pricer plugin prices a European vanilla per exotic instrument; the
+		// FIX edge answers z→S, executes QuotedOrderFlag=Y confirmations at
+		// the quoted price, and auto-quotes plain D on exotic symbols.
+		if qcfg := fcfg.Quotes; qcfg != nil && qcfg.Enabled {
+			reg := pricer.NewRegistry()
+			reg.Register(&saga.Saga{})
+			if _, ok := reg.Get(qcfg.Pricer); !ok {
+				log.Fatalf("fix quotes: pricer %q not registered (have %v)", qcfg.Pricer, reg.Names())
+			}
+			numPaths := qcfg.NumPaths
+			if numPaths <= 0 {
+				numPaths = 65536
+			}
+			model := pricer.Params{
+				Vol: qcfg.Vol, NumPaths: numPaths,
+				NumSteps: qcfg.NumSteps, Seed: qcfg.Seed,
+				ExpiryYears: 1.0,  // per-leg T; ATM at the live mid
+				Model:       "bs", // pricing model for the saga backend
+			}
+			q := newFixQuoter(reg, qcfg.Pricer, book, qcfg.Exotics, qcfg.SpotFrom, qcfg.SpreadBps, model)
+			if ttl := qcfg.QuoteTTL; ttl != "" {
+				if d, err := time.ParseDuration(ttl); err == nil {
+					fixSrv.SetQuoteTTL(d)
+				} else {
+					log.Fatalf("fix quotes: bad quote_ttl %q: %v", ttl, err)
+				}
+			}
+			fixSrv.SetQuoter(q)
+			log.Printf("FIX quotes: pricer=%s exotics=%v spread=%.1fbps", qcfg.Pricer, qcfg.Exotics, qcfg.SpreadBps)
+		}
+
 		group.Go(func() error {
 			log.Printf("FIX 4.4 acceptor listening on %s (SenderCompID %s)", fcfg.Listen, fcfg.SenderCompID)
 			if err := fixSrv.ListenAndServe(ctx, fcfg.Listen); err != nil && !errors.Is(err, context.Canceled) {

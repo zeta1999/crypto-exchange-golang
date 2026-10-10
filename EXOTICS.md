@@ -88,15 +88,36 @@ All three mirror recorded inputs and goldens from the examples checkout
 
 ## Where it plugs in next (order of work)
 
-1. **Order entry / exercise for option instruments** (per the options
-   architecture notes: `Instrument` → `ContractSpec` with style/settlement/
-   multiplier/payoff, then EAPI+venues gain place/cancel).
-2. **FIX quote responder:** `NewOrderSingle` for a `payType != VANILLA`
-   instrument → look the pricer up in the registry → `Quote` (35=z) back. No other
-   layer changes.
-3. **Dealer-quoting mode** of `optmarket`: the emulator holds a `Pricer` and
-   quotes off the reference book + vol surface, risk-limited — same interface.
-4. **Golden-file CI test**: pin a saga-priced scenario the way the scenario
-   golden test does, once a dev build of the engine (uncapped, bit-identical RNG)
-   is available for CI; until then the tests compare at 1e-3 like the examples
-   harness does.
+1. **FIX quote responder — DONE (CR-10).** The FIX 4.4 acceptor (`internal/api/fix`)
+   now speaks the OTC quote flow end-to-end, wired to this plugin:
+   - `QuoteRequest` (35=`z`) {Symbol, Side, OrderQty} → the `Quoter` prices →
+     `Quote` (35=`S`) {QuoteID 117, BidPx 132, OfferPx 133, sizes, TransactTime}
+   - confirmation: `NewOrderSingle` (35=`D`) with **QuotedOrderFlag=Y (692)**
+     and `OrderID` (37) = the QuoteID → executed AT THE QUOTED PRICE (offer for a
+     buy, bid for a sell), exactly once, into the same engine book → normal
+     ExecutionReport flow (NEW → fills)
+   - a **plain D on a quote-only instrument** (no flag) → answered with a fresh
+     Quote instead of resting (dealer quoting on inbound interest)
+   - reused/expired/foreign-session quotes → Rejected. Quote table is TTL-pruned
+     and capped (4096). Config: `api.fix.quotes{enabled,pricer,exotics,vol,
+     spread_bps,num_paths,quote_ttl}` (see configs/dev.yaml).
+   - `Quoter` is a 2-method interface the fix package owns; `cmd/exchange`
+     supplies `fixQuoter`, the adapter that reads the **live engine book mid** as
+     spot, prices an ATM European via the registry saga pricer (C + P legs), and
+     quotes `S−K+put / S−K+call` (put-call parity ⇒ uncrossed) ± half spread.
+   - Verified: unit (mock quoter: z→S, quoted-D→NEW at quoted price resting on the
+     book, double-execute → Rejected, plain-D-on-exotic → S, quoter-failure →
+     reject, no-quoter → BusinessReject) + **live smoke** (`TestManualSmoke`,
+     skip-gated): a real server with the saga plugin answered a QuoteRequest,
+     executed the confirmed order into the emulator-seeded book, and rejected the
+     reused quote — all with real saga prices.
+
+2. **Option order entry + exercise/settle for the EAPI option instruments**
+   (per the options architecture notes: `Instrument` → `ContractSpec` with
+   style/settlement/multiplier/payoff, then place/cancel at EAPI + venues, then an
+   expiry sweep settling cash at intrinsic off the index rule).
+3. **Dealer-quoting mode of `optmarket`**: the emulator holds a `Pricer` and quotes
+   exotic books off the reference book + vol surface under risk limits — same
+   `Quoter` seam the FIX edge now uses.
+4. **CI golden** for saga-priced scenarios, once an uncapped, bit-identical engine
+   dev build is available (tests compare at 1e-3 rel like the examples harness).

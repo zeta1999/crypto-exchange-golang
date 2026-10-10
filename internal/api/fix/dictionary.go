@@ -52,6 +52,15 @@ const (
 	TagMDEntrySize    = 271
 	TagMDUpdateAction = 279
 	TagMDReqRejReason = 281
+
+	// Quote flow (OTC / flow exotics)
+	TagQuoteReqID      = 131
+	TagQuoteID         = 117
+	TagBidPx           = 132
+	TagOfferPx         = 133
+	TagBidSize         = 134
+	TagOfferSize       = 135
+	TagQuotedOrderFlag = 692
 )
 
 // Message types (tag 35 values).
@@ -72,6 +81,8 @@ const (
 	MsgMarketDataSnap    = "W"
 	MsgMarketDataInc     = "X"
 	MsgMarketDataReject  = "Y"
+	MsgQuoteRequest      = "z"
+	MsgQuote             = "S"
 	MsgBusinessReject    = "j"
 )
 
@@ -101,6 +112,7 @@ func NewDictionary() *Dictionary {
 		MsgOrderCancelReq:  {TagClOrdID, TagOrigClOrdID, TagSymbol, TagSide},
 		MsgOrderCancelRepl: {TagClOrdID, TagOrigClOrdID, TagSymbol, TagSide, TagOrderQty, TagOrdType},
 		MsgMarketDataReq:   {TagMDReqID, TagSubReqType, TagMarketDepth, TagNoMDEntryTypes, TagNoRelatedSym},
+		MsgQuoteRequest:    {TagQuoteReqID, TagSymbol, TagSide, TagOrderQty},
 	}}
 }
 
@@ -138,9 +150,17 @@ func (d *Dictionary) Validate(m *Message) *ValidateError {
 			return &ValidateError{Tag: tag, Msg: fmt.Sprintf("%s missing required tag %d", mt, tag)}
 		}
 	}
-	// Conditional: a LIMIT order (40=2) must carry a Price (44).
+	// Conditional: a LIMIT order (40=2) must carry a Price (44) — UNLESS it is
+	// a quoted-order confirmation (QuotedOrderFlag=Y, 692): the price is the
+	// stored quote's, so tag 44 is optional there.
 	if mt == MsgNewOrderSingle || mt == MsgOrderCancelRepl {
-		if ot, _ := m.Get(TagOrdType); ot == "2" && !m.Has(TagPrice) {
+		quoted := false
+		if mt == MsgNewOrderSingle {
+			if f, _ := m.Get(TagQuotedOrderFlag); f == "Y" {
+				quoted = true
+			}
+		}
+		if ot, _ := m.Get(TagOrdType); ot == "2" && !quoted && !m.Has(TagPrice) {
 			return &ValidateError{Tag: TagPrice, Msg: "LIMIT order missing Price (44)"}
 		}
 	}

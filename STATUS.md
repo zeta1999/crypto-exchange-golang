@@ -1,6 +1,6 @@
 # STATUS
 
-_Last updated: 2026-10-10 (exotics pricing plugin)_
+_Last updated: 2026-10-10 (CR-10: flow-exotics pricing plugin + FIX quote-driven order entry)_
 
 ## Current phase
 **Runnable product + exact decimals** ✅ — `go run ./cmd/exchange` boots a live Coinbase-mirroring
@@ -31,7 +31,13 @@ Binance EAPI + Deribit/OKX/Bybit-compatible public shapes (`optmarket` + per-ven
 `"saga"` backend driving the Sibelius/Aria `SibeliusSaga` engine over its JSON CLI
 (`../price-master-examples`; portable-RNG reproducible; barrier/Asian/autocall payoffs via
 `.aria` scripts); demo in `cmd/examples-pricer`, goldens within the examples harness's 1e-3
-tolerance. See EXOTICS.md.
+tolerance. **Flow-exotics order entry (CR-10):** quote-driven OTC over the FIX
+4.4 acceptor — `QuoteRequest` (z) → `Quoter` (saga-priced ATM vanilla off the
+live book mid, put-call-parity quoted pair) → `Quote` (S); confirmation via
+`NewOrderSingle` QuotedOrderFlag=Y (692) + OrderID=QuoteID executes at the
+quoted price (single-use, TTL-capped table), plain D on a quote-only
+instrument gets a fresh quote, reuse → Rejected. Unit + live smoke green.
+See EXOTICS.md.
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -115,11 +121,10 @@ Set `emulator.enabled: false` for a plain offline matching engine.
 1. Option order entry + exercise/cash-settlement: widen `optmarket.Instrument`
    → `ContractSpec` (style/settlement/multiplier/payoff), then add place/cancel
    on the EAPI-compatible edges against the engine book (reuse CR-5
-   `RecordUnique` clientOrderId idempotency).
-2. Wire the exotics `Pricer` registry into the FIX acceptor: exotic
-   `NewOrderSingle` → registry pricer → `Quote` (35=z); add a dealer-quoting
-   mode of `optmarket` so the emulator quotes exotics off the reference book +
-   vol surface under risk limits.
+   `RecordUnique` clientOrderId idempotency) + an expiry sweep settling cash at
+   intrinsic off the index rule.
+2. Dealer-quoting mode of `optmarket`: quote exotic books off the reference
+   book + vol surface under risk limits (reuses the CR-10 `Quoter` seam).
 3. CI golden for saga-priced scenarios once an uncapped, bit-identical engine
    dev build is available (tests currently pin at the examples harness's 1e-3
    rel tolerance).

@@ -74,7 +74,7 @@ Purpose-built for technical and scenario testing of trading / OMS systems:
 | **Coinbase-compatible** | Advanced Trade REST (orders, batch_cancel, product_book, products, accounts, withdraw; **fee fields** + `price_increment`) + WS (`level2` **true incremental diffs**, `market_trades`, `user`) + CB-ACCESS HMAC **& ES256 JWT** (CCXT-go conformance pass) | ✅ done |
 | **Native** | gRPC bidi-stream, HTTP REST, WebSocket | ✅ done |
 | **Crypto options (EAPI-compatible)** | `/eapi/v1/{mark,depth,index,exchangeInfo,optionContracts}` — one European cash-settled market priced with Black–Scholes off the spot index (IV + greeks + synthetic book), published on the Binance **and** Deribit/OKX/Bybit-compatible public shapes at once | ✅ done (market data) |
-| **Flow-exotics pricing** | pluggable `Pricer` backend (default: the Sibelius/Aria `SibeliusSaga` engine — barrier, lookback, Asian, autocalls, … via `.aria` payoff scripts, portable-RNG reproducible) | ✅ plugin + demo |
+| **Flow-exotics pricing + order entry** | pluggable `Pricer` backend (default: the Sibelius/Aria `SibeliusSaga` engine — barrier, lookback, Asian, autocalls via `.aria` payoffs, portable-RNG reproducible); **quote-driven OTC order entry over FIX 4.4** (35=z→S, QuotedOrderFlag confirm, dealer auto-quote) at the `Quoter` seam | ✅ plugin + FIX quote flow |
 
 > Prices & quantities are exact **base-10 fixed-point decimals** (`pkg/decimal`, 18 digits,
 > 128-bit) end-to-end — matching is bit-deterministic, venue decimal strings round-trip losslessly.
