@@ -37,7 +37,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] config: instrument, depth levels; `Run(interval)` cadence + `Clear`
 - [x] tests: no user activity ⇒ engine book == reference (+ resize/cancel/cap/idempotent/skip)
 - [x] brutal review + fixes (ErrOrderNotFound benign; proved no cross-side self-match)
-- [ ] (deferred to Phase 4) partial-fill top-up accounting; venue/refresh wiring into configs/cmd
+- [x] (deferred to Phase 4) partial-fill top-up accounting; venue/refresh wiring — done in Phase 4 (generation-stamped IDs + trade-hook fill buffer; top-up via Converge)
 
 ## Phase 4 — Return-to-Reference [a]
 - [x] fill accounting: top partially-eaten levels back up; generation-stamped IDs; volEps tolerance compare
@@ -46,7 +46,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] track spot moves (new levels ramp in, departed levels drain — same Converge path)
 - [x] scenario test: perturb → converge (seeded, deterministic) + fill-accounting soundness
 - [x] brutal review + fixes (generation IDs, single fill path, RTR.Run dt)
-- [ ] (still open) seeder lock held across engine calls — acceptable now; revisit if Clear/shutdown latency matters at scale
+- [x] seeder lock no longer held across engine calls (separate fill buffer with its own lock; review note resolved)
 
 ## Phase D — Fixed-point decimals (foundational; prices & quantities) — see PLAN.md §9
 - [x] `pkg/decimal`: `Decimal` (base-10, 18 frac digits, signed 128-bit scaled storage `{hi,lo}`)
@@ -166,3 +166,12 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] gRPC + native-WS request metrics (`exchange_{grpc,ws}_requests/commands_total` by method/command+status) + latency **histograms** (dependency-free `metrics.Histogram`)
 - [x] README refresh with run instructions (branded README + capabilities)
 - [x] account balance ledger → live /account + /accounts (lock/settle on trade)
+
+## Exotics — pricing as a plugin
+- [x] `internal/pricer`: `Pricer` interface (`Name`/`Price(ctx, Params)`), `Params`/`Result`, `Registry` — venue- and backend-agnostic seam (feed.Source-in-reverse pattern)
+- [x] `internal/pricer/saga`: "saga" plugin — Sibelius/Aria `SibeliusSaga` demo binary (../price-master-examples) via its JSON CLI; portable-RNG reproducibility, `script`/`script_file` payoffs, model→endpoint map (BS/AriaMCPrice, Dupire local-vol + flat-surface default, hybrid_lv, pass-through), root+bin auto-discovery w/ env + per-instance overrides, concurrency-safe (private temp dir per call)
+- [x] simple examples: `cmd/examples-pricer` prices a European call (MC), down-and-out barrier, and arithmetic-average Asian — mirroring recorded example inputs; outputs within the examples harness's 1e-3 relative tolerance of the repo goldens
+- [x] tests: golden-pinned barrier + Asian at 1e-3 rel tol (recorded values, rng=portable), registry round-trip; skip-if-missing like conformance/ccxt-go
+- [ ] (follow-up) option order entry + exercise/settle (per options architecture: `Instrument`→`ContractSpec`, then place/cancel at EAPI + venues)
+- [ ] (follow-up) FIX 4.4 quote responder: exotic `NewOrderSingle` → registry pricer → `Quote` (35=z); dealer-quoting mode of optmarket
+- [ ] (follow-up) CI golden: pin a saga-priced scenario once an uncapped, bit-identical engine dev build is available

@@ -1,6 +1,6 @@
 # STATUS
 
-_Last updated: 2026-06-03 (CR-5)_
+_Last updated: 2026-10-10 (exotics pricing plugin)_
 
 ## Current phase
 **Runnable product + exact decimals** ✅ — `go run ./cmd/exchange` boots a live Coinbase-mirroring
@@ -19,11 +19,19 @@ endpoints), `pkg/decimal` + migration, and Phase 11 hardening (metrics, rate lim
 validation). **CCXT conformance PASS:** the stock `ccxt-go` v4 binance client drives the edge
 end-to-end (loadMarkets→fetchOrderBook→createLimitOrder→fetchOpenOrders→cancelOrder) with only
 the base URL changed (`conformance/ccxt-go/`); surfaced + fixed two SIGNED-POST bugs (sign over
-query+body, timestamp from body). **Remaining:** Phase 11 tail (scenario golden-file CI tests,
-gRPC/WS request metrics); **Phase 10 custody** (stretch, testnet). **Coinbase CCXT ES256-JWT
+query+body, timestamp from body). **Coinbase CCXT ES256-JWT
 conformance: PASS.** Recent edge polish: Binance `@depth` incremental diff stream, Coinbase fee
 fields + **true level2 incremental diffs**, Solana USDC SPL send, and USDC/native deposit-watch
 across Solana/EVM/BTC (auto-credit). Deferred: live broadcast of EVM/SOL/BTC sends (faucet-gated).
+**Options:** CR-8 FIX 4.4 acceptor (order entry + market-data liquidity search), CR-9 EAPI crypto-options
+market-data surface (European cash-settled, BS-priced, IV + greeks + synthetic book, recorded
+fixtures), and one option market published on **all four** crypto options venues at once —
+Binance EAPI + Deribit/OKX/Bybit-compatible public shapes (`optmarket` + per-venue edges).
+**Flow-exotics pricing is a plugin:** `internal/pricer` seam (`Pricer`/`Registry`) with the
+`"saga"` backend driving the Sibelius/Aria `SibeliusSaga` engine over its JSON CLI
+(`../price-master-examples`; portable-RNG reproducible; barrier/Asian/autocall payoffs via
+`.aria` scripts); demo in `cmd/examples-pricer`, goldens within the examples harness's 1e-3
+tolerance. See EXOTICS.md.
 
 ## Legend
 ☐ not started ◐ in progress ☑ done
@@ -104,11 +112,14 @@ Set `emulator.enabled: false` for a plain offline matching engine.
 - None.
 
 ## Next actions
-1. Begin Phase 4 return-to-reference: after a user trade perturbs the engine
-   book, drain stale synthetics + converge back to reference over `tau`.
-2. Carry into Phase 4 (deferred from Phase 3 review): fill accounting — when a
-   user trade partially eats a synthetic order, the seeder must top the level
-   back to reference size (track desired vs resting remainder separately;
-   compare volumes with tolerance, not `==`). Also reconsider holding the
-   seeder mutex across many engine calls (snapshot diff, release, then apply)
-   so `Clear`/shutdown isn't blocked by a deep reconcile.
+1. Option order entry + exercise/cash-settlement: widen `optmarket.Instrument`
+   → `ContractSpec` (style/settlement/multiplier/payoff), then add place/cancel
+   on the EAPI-compatible edges against the engine book (reuse CR-5
+   `RecordUnique` clientOrderId idempotency).
+2. Wire the exotics `Pricer` registry into the FIX acceptor: exotic
+   `NewOrderSingle` → registry pricer → `Quote` (35=z); add a dealer-quoting
+   mode of `optmarket` so the emulator quotes exotics off the reference book +
+   vol surface under risk limits.
+3. CI golden for saga-priced scenarios once an uncapped, bit-identical engine
+   dev build is available (tests currently pin at the examples harness's 1e-3
+   rel tolerance).
