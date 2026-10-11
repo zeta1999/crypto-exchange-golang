@@ -135,14 +135,26 @@ func TestFloatSignZeroCmp(t *testing.T) {
 	if Min(a, b) != a || Max(a, b) != b {
 		t.Error("min/max")
 	}
-	// NaN sorts deterministically above all values as a total order (map-key
-	// consistency); its sign is reported as +1.
+	// NaN sorts deterministically above all values in Cmp, and signs as +1.
 	nan := Decimal{f: math.NaN()}
 	if nan.Cmp(a) != 1 || a.Cmp(nan) != -1 || nan.Cmp(Decimal{f: math.NaN()}) != 0 {
 		t.Error("NaN total-order cmp")
 	}
 	if nan.Sign() != 1 {
 		t.Error("NaN sign")
+	}
+	// Limitation pinned explicitly: maps and == use the float64 bits (NaN !=
+	// NaN), so a NaN value CANNOT round-trip as a map key even though Cmp(n,n)
+	// is 0. A NaN is unreachable through the constructors, but reachable via
+	// float64 overflow arithmetic (Inf - Inf), which is why this backend is
+	// bench-only, never for order books.
+	m := map[Decimal]int{}
+	m[nan] = 1
+	if _, ok := m[nan]; ok {
+		t.Error("expected NaN map-key lookup to MISS (documented limitation)")
+	}
+	if nan.Eq(Decimal{f: math.NaN()}) {
+		t.Error("Eq on NaN must be false (Go == semantics)")
 	}
 }
 

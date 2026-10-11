@@ -140,19 +140,21 @@ func (d Decimal) StringPrec(prec int) string {
 		prec = ScaleDigits
 	}
 	if d.f == 0 {
-		// Match the exact backend's signed-zero truncation behavior for
-		// sub-tiny negatives (e.g. Parse("-0.000000000000000001") →
-		// "-0.000000" with StringPrec(6)); the float64 value rounds to 0
-		// here, so synthesize the sign from the input is impossible —
-		// we just emit the numeric zero.
+		// Covers +0 and -0 (Parse("-0") → -0). The sign is dropped, so
+		// "-0" renders "0.000000" — the float64 backend cannot recover a
+		// sub-tiny negative's sign once it rounds to zero (the exact
+		// backend renders -1e-18 as "-0.000000"; see the %f path below for
+		// the non-zero case).
 		if prec == 0 {
 			return "0"
 		}
 		return "0." + strings.Repeat("0", prec)
 	}
 	out := fmt.Sprintf("%.*f", prec, d.f)
-	// %f never emits "-0" for tiny negative non-zero magnitudes at low prec,
-	// so there is no special-casing needed.
+	// A tiny negative non-zero magnitude (e.g. Parse("-0.000000000000000001")
+	// → -1e-18) renders as "-0.000000" at prec 6 — the negative sign is
+	// preserved, matching the exact backend's truncation rendering. That is
+	// intended; no special-casing.
 	return out
 }
 
@@ -229,9 +231,8 @@ func (d Decimal) Abs() Decimal { return Decimal{f: math.Abs(d.f)} }
 
 // --- comparison ---
 
-// Sign returns -1, 0, or +1. NaN compares as non-zero (its sign is +1 since
-// math.Copysign of NaN carries the sign bit; we treat NaN as +1 to be
-// deterministic with the float64 bit pattern).
+// Sign returns -1, 0, or +1. NaN reports +1 (deterministic for a value that
+// the exact backend can never produce).
 func (d Decimal) Sign() int {
 	if math.IsNaN(d.f) {
 		return 1
@@ -248,10 +249,14 @@ func (d Decimal) Sign() int {
 // IsZero reports whether d == 0 (and not NaN).
 func (d Decimal) IsZero() bool { return d.f == 0 }
 
-// Cmp returns -1, 0, or +1. NaN sorts above all values (float64 NaN
-// convention) for deterministic total ordering as a map key.
+// Cmp returns -1, 0, or +1. NaN sorts above all values (float64 convention)
+// so Cmp itself is a deterministic total order. CAVEAT: Go maps and == use the
+// float64 bits, and NaN != NaN, so a NaN value still cannot be used as a map
+// key or round-tripped through Eq — if a NaN ever reaches the book (e.g. via
+// float64 overflow such as Inf-Inf in Mul), map lookups for it will miss. Use
+// the exact backend (which cannot produce NaN) for order books.
 func (d Decimal) Cmp(e Decimal) int {
-	// Handle NaN deterministically: NaN > everything.
+	// Handle NaN deterministically: NaN > everything in Cmp (maps don't use Cmp).
 	dN, eN := math.IsNaN(d.f), math.IsNaN(e.f)
 	switch {
 	case dN && eN:
