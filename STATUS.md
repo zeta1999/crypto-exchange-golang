@@ -190,3 +190,27 @@ Set `emulator.enabled: false` for a plain offline matching engine.
    (`go test ./internal/api/fix -run TestLive -v`). `TestWSMarketTradeRaw`
    read-deadline also raised 2s→8s (in-process test, but its 2s window starves
    for CPU under parallel `-race` load — observed intermittent CI timeout).
+
+## Done 2026-10-11 (evening) — hostile review round 2 (options domain)
+Two delegated hostile reviews (`pkg/decimal` exact core; the binance options order-entry
+domain) + my own brutal read. Fixes landed:
+- **F1 clean 500, not a broken connection** — the binance middleware now recovers handler
+  panics into a clean HTTP 500 JSON. A notional past the 128-bit range `Mul`s to an overflow
+  panic; net/http's *default* recovery would close the connection with a bare EOF (client sees
+  a "network" failure and blind-retries) + a stack trace. Now: one log line, a typed 500, and
+  the server keeps serving. Regression-tested by `TestEAPIOption_NotionalOverflowIsClean500`.
+  (Severity corrected by probe: it is NOT a process DoS — net/http auto-recovers per-conn —
+  but the client-visible connection break + stack spam was a real defect.)
+- **F2 settlement cash path is now exact-decimal** — `positionsFunc` / `SettlementHook` /
+  `finishSettle` thread `decimal.Decimal` for the *held contract quantity* (the money path);
+  `defaultOptionPositions` returns `ledger.Get(asset).Free` directly instead of `.Float64()`.
+  Only `PerUnit` stays float64 (an observed index/pricer print — inherently inexact).
+- **F3 `configs/options-test.yaml`** now seeds `USDT`/`ETH` (options settle in USDT against
+  the OTC contract assets; buyer reserves USDT). Previously a consumer booting it for option
+  order entry failed `-2010` on every trade.
+- **F7** `TestLiveOptionsOrderEntry` is now gated behind `testing.Short()`, consistent with its
+  exotic sibling (a full exchange-binary boot was running in the `-short` CI gate).
+- Documented the exact↔float `Mul` **overflow divergence** (exact panics; float returns ±Inf):
+  both yield a clean typed error, the float backend is benchmark-only by design.
+Float64 A/B stage now also covers the overflow path (the F1 regression test runs green under
+both backends).

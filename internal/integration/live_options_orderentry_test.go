@@ -32,6 +32,9 @@ import (
 //     and still only one order appears (CR-5 place-time idempotency).
 //  4. DELETE /eapi/v1/order cancels it; open-orders is empty afterwards.
 func TestLiveOptionsOrderEntry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live: spins up a full exchange binary end-to-end (skipped under -short CI gate)")
+	}
 	binPath := buildExchangeBinary(t)
 	dir := t.TempDir()
 	grpcPort, wsPort, httpPort, binancePort := freeTCPPort(t), freeTCPPort(t), freeTCPPort(t), freeTCPPort(t)

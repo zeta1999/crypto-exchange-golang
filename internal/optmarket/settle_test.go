@@ -85,15 +85,15 @@ func TestSettle_CashAtIntrinsicAndPayoff(t *testing.T) {
 	// Accumulate the cash the venue must settle for the client positions
 	// (long-only: held units — the single-account model has no net shorts).
 	var got float64
-	hook := func(rec Settlement, l float64) {
-		got += l * rec.PerUnit
+	hook := func(rec Settlement, l decimal.Decimal) {
+		got += l.Float64() * rec.PerUnit
 	}
-	positions := map[string]float64{
-		"BTC-261231-50000-C":   2, // long 2 ATM calls
-		"BTC-261231-40000-C":   3, // long 3 deep-ITM calls
-		"BTC-261231-50000-BAR": 1, // long 1 exotic
+	positions := map[string]decimal.Decimal{
+		"BTC-261231-50000-C":   decimal.FromInt(2), // long 2 ATM calls
+		"BTC-261231-40000-C":   decimal.FromInt(3), // long 3 deep-ITM calls
+		"BTC-261231-50000-BAR": decimal.FromInt(1), // long 1 exotic
 	}
-	pos := func(sym string) float64 { return positions[sym] }
+	pos := func(sym string) decimal.Decimal { return positions[sym] }
 
 	settled := m.Settle(context.Background(), &Settler{Matcher: fm}, pos, hook)
 

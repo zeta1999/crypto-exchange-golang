@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/orderbook"
+	"github.com/zeta1999/crypto-exchange-golang/pkg/decimal"
 )
 
 // Settler drives the EXPIRY SWEEP for the listed options (cash settlement).
@@ -78,14 +79,18 @@ type Settlement struct {
 
 // SettlementHook settles CASH for the client's position in one settled
 // contract: it is called with the contract's held units (longQty, pre-
-// multiplier) and must credit longQty·PerUnit into the QUOTE asset and
-// BURN the contract asset (expired units are no longer a position). The
-// single-account emulated model has no net-short positions — a sell can
-// never exceed the held balance — so only the long side is plumbed.
-type SettlementHook func(rec Settlement, longQty float64)
+// multiplier, as an EXACT decimal — the money path must not round-trip the
+// held quantity through float64) and must credit longQty·PerUnit into the
+// QUOTE asset and BURN the contract asset (expired units are no longer a
+// position). PerUnit itself is the settlement value (an observed index print
+// or pricer payoff) and stays float64 by nature. The single-account emulated
+// model has no net-short positions — a sell can never exceed the held
+// balance — so only the long side is plumbed.
+type SettlementHook func(rec Settlement, longQty decimal.Decimal)
 
-// positionsFunc reports the client's held contract units for one symbol.
-type positionsFunc func(sym string) (long float64)
+// positionsFunc reports the client's held contract units for one symbol, as
+// an EXACT decimal (see SettlementHook).
+type positionsFunc func(sym string) (long decimal.Decimal)
 
 // Settle runs ONE expiry-sweep pass as of the market clock and returns the
 // settlements completed on this pass (vanillas in listing order, then
@@ -142,7 +147,7 @@ func (m *Market) Settle(ctx context.Context, s *Settler, positions positionsFunc
 
 // settleOne cancels rests, records (the caller CLAIMED the symbol), and fires
 // the cash hook for one contract.
-func (m *Market) finishSettle(ctx context.Context, s *Settler, sym string, isExotic bool, idx, perUnit, mult float64, positions func(string) float64, onSettle SettlementHook) Settlement {
+func (m *Market) finishSettle(ctx context.Context, s *Settler, sym string, isExotic bool, idx, perUnit, mult float64, positions func(string) decimal.Decimal, onSettle SettlementHook) Settlement {
 	m.cancelResting(ctx, sym, s)
 	rec := Settlement{
 		Symbol:     sym,
@@ -156,7 +161,7 @@ func (m *Market) finishSettle(ctx context.Context, s *Settler, sym string, isExo
 	m.settlements = append(m.settlements, rec)
 	m.settleMu.Unlock()
 	if positions != nil && onSettle != nil {
-		if l := positions(sym); l > 0 {
+		if l := positions(sym); l.Sign() > 0 {
 			onSettle(rec, l)
 		}
 	}

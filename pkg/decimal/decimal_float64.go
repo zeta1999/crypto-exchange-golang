@@ -211,6 +211,14 @@ func (d Decimal) Sub(e Decimal) Decimal { return Decimal{f: d.f - e.f} }
 func (d Decimal) Neg() Decimal { return Decimal{f: -d.f} }
 
 // Mul returns d * e in float64 semantics.
+//
+// DIVERGENCE FROM THE EXACT CORE (A/B note): float64 Mul does NOT panic on
+// overflow — it yields ±Inf (e.g. a notional past ~1e200), whereas the exact
+// core panics with "value overflows 128-bit range". Callers that rely on the
+// panic as a range guard (e.g. the option-order notional path, which converts
+// it to a clean HTTP 500) instead receive +Inf and take the normal
+// insufficient-balance branch. Both return a clean typed error; the float
+// backend is benchmark-only precisely so such divergences never reach books.
 func (d Decimal) Mul(e Decimal) Decimal { return Decimal{f: d.f * e.f} }
 
 // Div returns d / e in float64 semantics. Panics on division by zero to

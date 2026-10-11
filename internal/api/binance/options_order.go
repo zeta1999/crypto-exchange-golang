@@ -393,20 +393,21 @@ func (s *Server) settleOptionFill(engineID string, isBuy bool, qty, fillPrice de
 }
 
 // defaultOptionPositions returns the client's HELD contracts in `sym` (the
-// ledger's free OTC balance). The single-account emulated model has no net-
-// short positions: a SELL cannot exceed the held balance (it is rejected past
-// it), so the free OTC balance is the full long position. The venue's resting
-// synthetic liquidity lives in the order BOOK, not the ledger, so it never
-// pollutes this number.
-func (s *Server) defaultOptionPositions(sym string) float64 {
+// ledger's free OTC balance) as an EXACT decimal — the settlement cash path
+// must not round-trip the held quantity through float64. The single-account
+// emulated model has no net-short positions: a SELL cannot exceed the held
+// balance (it is rejected past it), so the free OTC balance is the full long
+// position. The venue's resting synthetic liquidity lives in the order BOOK,
+// not the ledger, so it never pollutes this number.
+func (s *Server) defaultOptionPositions(sym string) decimal.Decimal {
 	if s.ledger == nil || s.optMarket == nil {
-		return 0
+		return decimal.Zero
 	}
 	_, asset, ok := s.optMarket.QuoteAndAsset(sym)
 	if !ok {
-		return 0
+		return decimal.Zero
 	}
-	return s.ledger.Get(asset).Free.Float64()
+	return s.ledger.Get(asset).Free
 }
 
 // SettleOptions runs ONE expiry sweep against the options book: settles every
@@ -426,7 +427,7 @@ func (s *Server) SettleOptions(ctx context.Context) []optmarket.Settlement {
 	// production default (settleOptionCash) — credits the QUOTE asset and
 	// burns the contract. Sweep diagnostics go to the process log once per
 	// message (a broken exotic retries every tick; reported once, not 1 Hz).
-	var hook func(rec optmarket.Settlement, longQty float64)
+	var hook func(rec optmarket.Settlement, longQty decimal.Decimal)
 	if s.ledger != nil {
 		hook = s.settleOptionCash
 	}
@@ -467,17 +468,19 @@ func splitFields2(line string) string {
 // is not a position; it must not linger in /account). In the single-account
 // model the long cannot exceed free (a sell is rejected past it), so credit
 // then burn is exact; the clamp in Burn is the belt for a rounding residual.
-func (s *Server) settleOptionCash(rec optmarket.Settlement, longQty float64) {
-	if s.ledger == nil || longQty <= 0 {
+func (s *Server) settleOptionCash(rec optmarket.Settlement, longQty decimal.Decimal) {
+	if s.ledger == nil || longQty.IsZero() {
 		return
 	}
 	quote, asset, ok := s.optMarket.QuoteAndAsset(rec.Symbol)
 	if !ok {
 		return
 	}
-	units := decimal.FromFloat(longQty)
-	s.ledger.Credit(quote, units.Mul(decimal.FromFloat(rec.PerUnit)))
-	s.ledger.Burn(asset, units)
+	// Credit the exact held quantity times the settlement value. longQty stays
+	// an exact decimal end-to-end (no float round-trip of the held contracts);
+	// only PerUnit — the observed index/pricer settlement print — is float64.
+	s.ledger.Credit(quote, longQty.Mul(decimal.FromFloat(rec.PerUnit)))
+	s.ledger.Burn(asset, longQty)
 }
 
 // optSettlerMatcher adapts the engine book to the optmarket sweep's Matcher

@@ -242,6 +242,52 @@ func TestEAPIOption_Lifecycle(t *testing.T) {
 	}
 }
 
+// TestEAPIOption_NotionalOverflowIsClean500 pins the F1 DoS-safety contract:
+// a BUY whose price·qty notional exceeds the 128-bit decimal range overflows
+// decimal.Mul, which PANICS. That panic must be converted by the middleware
+// into a clean HTTP 500 JSON error (and the connection must stay intact for
+// the next request) — NOT net/http's default per-connection recovery, which
+// closes the connection with a bare EOF. 1e15·1e15 = 1e30 > max (~1.7e32/1e18
+// = 1.7e14 in scaled 18dp terms → actually 2^127/1e18 ≈ 1.7e19…; the point is
+// it overflows, confirmed by the decimal core).
+func TestEAPIOption_NotionalOverflowIsClean500(t *testing.T) {
+	sym := "BTC-261231-50000-C"
+	h := newOptOrderHarness(t, optTestMarket(), map[string]string{"USDT": "100000", "OTC:" + sym: "4"})
+	mk, err := h.market.Mark(sym)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// price = the mark (in-band by construction, so the band check passes and
+	// we reach the notional price·qty Mul); qty = 1e20, which parses (< the
+	// ~1.7e20 128-bit value ceiling) but overflows mark·qty for any mark>1.7.
+	// Without the middleware recover this panics in decimal.Mul and — under
+	// net/http's default recovery — closes the connection with a bare EOF.
+	params := eapiParams("symbol", sym, "side", "BUY", "type", "LIMIT",
+		"quantity", "100000000000000000000", "price", eapiNum(mk.Price), "newClientOrderId", "boom1")
+	resp := h.eapiDo(t, http.MethodPost, "/eapi/v1/order", params)
+	// The DoS-safety invariant: a notional that exceeds the addressable range
+	// must return a CLEAN typed HTTP error and leave the process alive — never
+	// a broken connection (net/http's default recovery) and never an accepted
+	// order. The *code* diverges by backend by design: the exact core panics
+	// in decimal.Mul → recovered to HTTP 500; the float64 bench backend returns
+	// +Inf → rejected as insufficient balance (HTTP 400). Both are acceptable;
+	// what is NOT is 200 (order accepted) or a dropped connection.
+	if resp.StatusCode == http.StatusOK {
+		t.Error("status = 200 — an overflowing notional must NOT be accepted")
+	}
+	if resp.StatusCode != http.StatusInternalServerError && resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 500 (exact: recovered Mul panic) or 400 (float: +Inf insufficient balance)", resp.StatusCode)
+	}
+	resp.Body.Close() //nolint:errcheck // body not read in this test
+	// And the connection/server survives: a follow-up request still answers.
+	// Any typed JSON response proves the panic did not take the process or its
+	// connection down (the pre-fix default behavior was a bare EOF + no response).
+	if _, gotCode := h.eapiStatus(t, http.MethodGet, "/eapi/v1/order",
+		eapiParams("symbol", sym, "orderId", "does-not-exist")); gotCode != http.StatusBadRequest {
+		t.Errorf("follow-up after overflow panic should still answer (HTTP 400 / -2011 unknown order), got status %d", gotCode)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Matching + two-sided ledger (buy mints contracts, sell redeems them)
 // ---------------------------------------------------------------------------

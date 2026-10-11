@@ -55,6 +55,12 @@ api:
     balances:
       USD: "1000000"
       BTC: "10"
+      # Options above are CASH-settled in USDT against the OTC contract assets,
+      # and the underlyings quote/coin USDT + ETH — a buyer reserves USDT and a
+      # settlement credits USDT, so seed them or option order entry fails -2010
+      # (mirror of the BTC/USD spot balances above).
+      USDT: "10000000"
+      ETH: "10"
     options:
       enabled: false  # alias of the top-level options book; leave off while that book is set
   coinbase:

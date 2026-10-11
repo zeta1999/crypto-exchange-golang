@@ -1,6 +1,8 @@
 package binance
 
 import (
+	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 
@@ -55,6 +57,28 @@ func (r *statusRecorder) WriteHeader(code int) {
 // recorder.
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Recover handler panics into a clean error instead of relying on
+		// net/http's default per-connection recovery: that one closes the
+		// connection with a bare EOF (the client sees a broken request —
+		// indistinguishable from a network failure, which invites blind
+		// retries) and dumps a stack trace. decimal overflow (e.g. a price·qty
+		// notional past the 128-bit range) is the known trigger from a
+		// legitimate-but-huge parameter.
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("binance: panic serving %s %s: %v", r.Method, r.URL.Path, rec)
+				s.recordRequest(r, http.StatusInternalServerError)
+				if !isWSPath(r.URL.Path) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusInternalServerError)
+					//nolint:errcheck // header/status already sent; encode failure is the last resort
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"code": -1000, // codeUnknown
+						"msg":  "Internal error; request could not be processed.",
+					})
+				}
+			}
+		}()
 		// Rate limit before any work. Key by API key when present, else remote IP.
 		if s.limiter != nil {
 			if !s.limiter.Allow(rateKey(r)) {
