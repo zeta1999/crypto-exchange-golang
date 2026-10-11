@@ -308,7 +308,10 @@ func (d Decimal) Div(e Decimal) Decimal {
 // MulFloat scales d by a float64 factor (doubly lossy: d→float64 then the
 // product→Decimal). For non-exact edge scaling such as the RTR convergence
 // fraction; not for authoritative values. Panics if d is large enough that
-// d.Float64()*f overflows the 128-bit range, so keep operands modest.
+// d.Float64()*f overflows the 128-bit range (or f is non-finite). The reverse
+// edge is LOUD in NEITHER direction: a tiny product that denormals below the
+// float64 range (e.g. FromInt(1).MulFloat(1e-300)) silently yields zero —
+// the 128-bit range is never the binding constraint there, so no panic.
 func (d Decimal) MulFloat(f float64) Decimal { return FromFloat(d.Float64() * f) }
 
 // Abs returns |d|.

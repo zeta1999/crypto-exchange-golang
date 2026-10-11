@@ -105,8 +105,10 @@ func (s *Stellar) Received(ctx context.Context, address, cursor string) ([]Payme
 			continue // only incoming payment operations
 		}
 		asset := "XLM"
-		if p.Asset.Type != "native" {
-			asset = p.Asset.Code //nolint:staticcheck // QF1008 false positive: Asset is the BasicAsset interface, Code is a method, not an embedded field
+		switch p.Asset.Type {
+		case "", "native": // type can be empty for failed txs — default to XLM
+		default:
+			asset = p.Code // embedded base.Asset (QF1008-qualified selector unnecessary)
 		}
 		out = append(out, Payment{
 			TxRef:  p.TransactionHash,
