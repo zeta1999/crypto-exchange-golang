@@ -43,11 +43,27 @@ type OptionSymbolInfo struct {
 	QuantityScale int    `json:"quantityScale"`
 }
 
-// ExchangeInfo is GET /eapi/v1/exchangeInfo (options subset).
+// ExchangeInfo is GET /eapi/v1/exchangeInfo (options subset). OptionSymbols
+// carries, per contract, the settlement spec alongside the price coordinates
+// (exercise style / settlement mode / index rule / multiplier).
 type ExchangeInfo struct {
-	Timezone      string             `json:"timezone"`
-	ServerTime    int64              `json:"serverTime"`
-	OptionSymbols []OptionSymbolInfo `json:"optionSymbols"`
+	Timezone      string         `json:"timezone"`
+	ServerTime    int64          `json:"serverTime"`
+	OptionSymbols []contractSpec `json:"optionSymbols"`
+}
+
+// contractSpec is one optionSymbols element: the OptionSymbolInfo listing
+// (flattened, as an embedded struct) plus the settlement terms from the
+// contract's ContractSpec, so a client knows HOW a contract settles, not
+// just its price coordinates.
+type contractSpec struct {
+	OptionSymbolInfo
+	// Settlement spec (see optmarket.ContractSpec): only the implemented
+	// shapes are listed — european / cash / point_in_time, multiplier 1.
+	ExerciseStyle string  `json:"exerciseStyle"`
+	Settlement    string  `json:"settlement"`
+	IndexRule     string  `json:"indexRule"`
+	Multiplier    float64 `json:"multiplier"`
 }
 
 // IndexData is GET /eapi/v1/index.
@@ -97,21 +113,28 @@ func ProjectDepth(b optmarket.Book) Depth {
 	return d
 }
 
-// ProjectExchangeInfo maps the contract list onto EAPI exchangeInfo.
-// serverTime is the book clock already stored on the spot, or the caller passes now.
+// ProjectExchangeInfo maps the contract list onto EAPI exchangeInfo, carrying
+// each contract's settlement spec (exerciseStyle/settlement/indexRule/
+// multiplier) alongside the price coordinates.
 func ProjectExchangeInfo(contracts []optmarket.Contract, serverTime int64) ExchangeInfo {
-	syms := make([]OptionSymbolInfo, len(contracts))
+	syms := make([]contractSpec, len(contracts))
 	for i, c := range contracts {
-		syms[i] = OptionSymbolInfo{
-			Symbol:        c.Symbol,
-			Underlying:    c.Underlying,
-			QuoteAsset:    c.Quote,
-			StrikePrice:   strconv.FormatFloat(c.Strike, 'f', -1, 64),
-			ExpiryDate:    c.ExpiryMs,
-			Side:          c.Side,
-			Unit:          c.Unit,
-			PriceScale:    c.PriceScale,
-			QuantityScale: c.QuantityScale,
+		syms[i] = contractSpec{
+			OptionSymbolInfo: OptionSymbolInfo{
+				Symbol:        c.Symbol,
+				Underlying:    c.Underlying,
+				QuoteAsset:    c.Quote,
+				StrikePrice:   strconv.FormatFloat(c.Strike, 'f', -1, 64),
+				ExpiryDate:    c.ExpiryMs,
+				Side:          c.Side,
+				Unit:          c.Unit,
+				PriceScale:    c.PriceScale,
+				QuantityScale: c.QuantityScale,
+			},
+			ExerciseStyle: c.ExerciseStyle,
+			Settlement:    c.Settlement,
+			IndexRule:     c.IndexRule,
+			Multiplier:    c.Multiplier,
 		}
 	}
 	return ExchangeInfo{Timezone: "UTC", ServerTime: serverTime, OptionSymbols: syms}

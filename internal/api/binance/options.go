@@ -7,12 +7,11 @@ import (
 	"github.com/zeta1999/crypto-exchange-golang/internal/optmarket"
 )
 
-// WithOptionsMarket enables the Binance-EAPI-compatible options market-data
-// surface (CR-9): GET /eapi/v1/{exchangeInfo,mark,mark/exotic,depth,index}.
-// Market data only — these endpoints are public (unsigned), like /api/v3/depth.
-// Options ORDER ENTRY is not wired here (the emulator's matching engine is
-// spot; options are a priced data surface for now). When nil, no /eapi routes
-// are registered.
+// WithOptionsMarket enables the Binance-EAPI-compatible options surface (CR-9
+// + order entry): GET /eapi/v1/{exchangeInfo,mark,mark/exotic,depth,index,
+// orders} (public market data) and POST/GET/DELETE /eapi/v1/order (SIGNED
+// option order entry, LIMIT-only, against the engine book on which the option
+// symbols are registered). When nil, no /eapi routes are registered.
 func WithOptionsMarket(om *optmarket.Market) Option {
 	return func(s *Server) { s.optMarket = om }
 }

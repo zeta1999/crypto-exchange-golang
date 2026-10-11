@@ -1,6 +1,6 @@
 # STATUS
 
-_Last updated: 2026-10-10 (CR-10: flow-exotics pricing plugin + FIX quote-driven order entry)_
+_Last updated: 2026-10-11 (options: dealer-quoting mode + option order entry / exercise / cash-settle)_
 
 ## Current phase
 **Runnable product + exact decimals** ✅ — `go run ./cmd/exchange` boots a live Coinbase-mirroring
@@ -38,7 +38,18 @@ caching keep a broken/outrageous payoff from minting calls or quotes; a missing 
 warning, not a failure (vanilla chain still serves). Unit (mock Pricer: single-call, bracketed fair,
 cache, overrides, risk limit, negative cache) + **live E2E green** (skip-gated, offline: exotic mark
 matches an independent saga reference at MC tolerance, below the plain vanilla call, uncrossed,
-provenance present).
+provenance present). **Option order entry + exercise/settle:** `Instrument` now carries a
+`ContractSpec` (european / cash / point-in-time index / multiplier — listed on `/eapi/v1/exchangeInfo`);
+a listed contract is one ledger asset (`OTC:<sym>`) traded against the quote; option orders are real
+`LIMIT` orders on the SAME engine book (registered at boot) — signed `POST/GET/DELETE /eapi/v1/order` +
+`GET /eapi/v1/orders` on the Binance EAPI edge (price-banded, `newClientOrderId`-idempotent, WS
+executionReports reused, no entry at/after the settlement instant); an expiry sweep (1s ticker) cancels
+the rests and settles CASH in the quote asset — vanilla at its own intrinsic off the index rule, exotic
+at its payoff's fresh T=0 terminal (never a vanilla leg); a missing settlement index or an unpricable
+payoff is left UNSETTLED (no fabricated index/terminal = no minted strike), then the expired contract
+asset is BURNED. Unit (place/query/cancel, matching ledger, band, settle idempotency + race drain +
+no-fabricated-zero) + **live E2E green** (signed place→query→cancel round-trip, duplicate-id and
+post-expiry entry rejected, burn verified).
 **Flow-exotics pricing is a plugin:** `internal/pricer` seam (`Pricer`/`Registry`) with the
 `"saga"` backend driving the Sibelius/Aria `SibeliusSaga` engine over its JSON CLI
 (`../price-master-examples`; portable-RNG reproducible; barrier/Asian/autocall payoffs via
@@ -127,17 +138,17 @@ Set `emulator.enabled: false` for a plain offline matching engine.
   `new_quantity:"0"` = level removal), **not** the legacy Exchange "channels" array the
   upstream repo used. Confirmed live: both venues stream trades+book; replay is bit-identical.
 
+- 2026-10-11: **Option contract model** (`optmarket.ContractSpec`): a listed option is
+  european / cash-settled / point-in-time index / multiplier 1 (the only shape this surface
+  implements); a traded contract is ONE ledger asset (`OTC:<sym>`) against the quote, and
+  order entry is real `LIMIT` entries on the shared engine book.
+
 ## Blocked / waiting
-- None.
+- CI golden for saga-priced scenarios: needs an uncapped, bit-identical engine dev build.
 
 ## Next actions
-1. Option order entry + exercise/cash-settlement: widen `optmarket.Instrument`
-   → `ContractSpec` (style/settlement/multiplier/payoff), then add place/cancel
-   on the EAPI-compatible edges against the engine book (reuse CR-5
-   `RecordUnique` clientOrderId idempotency) + an expiry sweep settling cash at
-   intrinsic off the index rule.
-2. Dealer-quoting mode of `optmarket`: quote exotic books off the reference
-   book + vol surface under risk limits (reuses the CR-10 `Quoter` seam).
-3. CI golden for saga-priced scenarios once an uncapped, bit-identical engine
+1. CI golden for saga-priced scenarios once an uncapped, bit-identical engine
    dev build is available (tests currently pin at the examples harness's 1e-3
    rel tolerance).
+2. (optional, Phase D) float64-backed backend behind the same decimal API for
+   A/B + fast mode.

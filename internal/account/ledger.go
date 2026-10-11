@@ -186,6 +186,23 @@ func (l *Ledger) Credit(asset string, amt decimal.Decimal) {
 	l.at(asset).free = l.at(asset).free.Add(amt)
 }
 
+// Burn removes up to amt from free (clamped; never fails, never mints) — for
+// positions ceasing to exist: after an option expires and its held units are
+// cashed out (the caller credits the cash), the units themselves leave the
+// account rather than lingering as worthless OTC balance.
+func (l *Ledger) Burn(asset string, amt decimal.Decimal) {
+	if amt.Sign() <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	h := l.at(asset)
+	if amt.Gt(h.free) {
+		amt = h.free
+	}
+	h.free = h.free.Sub(amt)
+}
+
 // Get returns the balance for one asset (zero if untracked).
 func (l *Ledger) Get(asset string) Balance {
 	l.mu.Lock()

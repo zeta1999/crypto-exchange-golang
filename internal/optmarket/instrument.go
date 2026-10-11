@@ -27,34 +27,6 @@ import (
 // Binance options. The contract date in the symbol denotes this instant.
 const expiryHourUTC = 8
 
-// Instrument is one European, cash-settled option.
-type Instrument struct {
-	// Coin is the symbol prefix (e.g. "BTC"); Underlying is the index pair the
-	// spot price is read from (e.g. "BTCUSDT"). Quote is the cash-settlement
-	// asset (e.g. "USDT").
-	Coin       string
-	Underlying string
-	Quote      string
-	Strike     float64
-	Kind       options.Kind
-	// Expiry is the settlement instant (date @ 08:00 UTC).
-	Expiry time.Time
-}
-
-// NewInstrument builds an instrument from its parts. `date` is the calendar
-// expiry day; the settlement instant is set to 08:00 UTC on that day.
-func NewInstrument(coin, underlying, quote string, strike float64, kind options.Kind, date time.Time) Instrument {
-	y, m, d := date.UTC().Date()
-	return Instrument{
-		Coin:       coin,
-		Underlying: underlying,
-		Quote:      quote,
-		Strike:     strike,
-		Kind:       kind,
-		Expiry:     time.Date(y, m, d, expiryHourUTC, 0, 0, 0, time.UTC),
-	}
-}
-
 // Exotic is one listed FLOW exotic on the options surface: a bespoke payoff
 // (barrier, Asian, autocall, lookback, digital, …) that has no closed form
 // and therefore cannot — and must not — be priced by the vanilla

@@ -25,3 +25,6 @@
 # custody keystores (encrypted, but never commit) + binary
 *.keystore.json
 /cmd/custody/custody
+
+# Parallel WIP held aside (not part of this commit)
+/.stash/

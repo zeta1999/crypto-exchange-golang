@@ -216,6 +216,13 @@ func main() {
 		if err := attachOptionsExotics(optCfg, optBook); err != nil {
 			log.Fatalf("options exotics: %v", err)
 		}
+		// Register the option symbols on the SAME engine book as the spot
+		// pairs so option orders are real limit orders in a real book (fills,
+		// WAL, and the edges' WS executionReports all apply), and the expiry
+		// sweep can cancel/list their rests.
+		for _, c := range optBook.Contracts() {
+			book.Register(c.Symbol)
+		}
 	}
 
 	// Optional Binance-spot-compatible REST edge (Phase 8, a documented
@@ -252,7 +259,21 @@ func main() {
 			log.Printf("Binance options (EAPI) surface enabled: %d instruments", len(optBook.Instruments()))
 		}
 		binanceSrv := binance.New(newMeteredEngine(eng, ordersPlaced, "binance"), symbolMap, authn, registry, opts...)
-		binanceSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking
+		binanceSrv.AttachHooks(book) // wire trade/cancel hooks for fill tracking (+ bookRef for option settle)
+		if optBook != nil && optCfg.Serves("binance") {
+			// Option order entry is live on the EAPI surface: the option
+			// symbols were registered on the SAME engine book above, so orders
+			// are real limit orders in a real book. This ticker runs the expiry
+			// sweep: settles expired contracts in cash — canceling their rests
+			// and cashing client positions in the quote asset at intrinsic
+			// (vanilla) / fresh payoff terminal (exotic). Idempotent per
+			// symbol, so a 1s cadence is cheap.
+			group.Go(func() error {
+				log.Printf("options settlement sweep enabled (1s cadence)")
+				optSettleLoop(ctx, binanceSrv)
+				return nil
+			})
+		}
 		group.Go(func() error {
 			log.Printf("Binance REST edge listening on %s", bcfg.Listen)
 			if err := binance.ListenAndServe(ctx, bcfg.Listen, binanceSrv, cfg.Network.TLS.CertFile, cfg.Network.TLS.KeyFile); err != nil && !errors.Is(err, context.Canceled) {
@@ -544,6 +565,26 @@ func buildLedger(balances map[string]string) *account.Ledger {
 		initial[asset] = v
 	}
 	return account.NewLedger(initial)
+}
+
+// optSettleLoop runs the options expiry sweep on a 1-second ticker until ctx is
+// cancelled. Each pass settles contracts that expired since the last pass
+// (canceling their resting orders and cashing client positions in the quote
+// asset at the settlement value). The sweep is idempotent per symbol, so a
+// high-frequency call is cheap when nothing has expired.
+func optSettleLoop(ctx context.Context, srv *binance.Server) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n := srv.SettleOptions(ctx); len(n) > 0 {
+				log.Printf("options settlement: settled %d contract(s)", len(n))
+			}
+		}
+	}
 }
 
 // buildOptionsMarket constructs the EAPI options market-data surface (CR-9) from

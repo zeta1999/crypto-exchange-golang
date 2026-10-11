@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/account"
@@ -40,9 +41,15 @@ type Server struct {
 	handler     http.Handler // mux wrapped with rate-limit + metrics middleware
 	ackDelay    func() time.Duration
 	fillDelay   func() time.Duration
-	ledger      *account.Ledger   // optional: real balances + lock/settle on trade
-	withdraw    WithdrawFunc      // optional: on-chain withdrawal (transfer hub)
-	optMarket   *optmarket.Market // optional: EAPI options market-data surface (CR-9)
+	ledger      *account.Ledger      // optional: real balances + lock/settle on trade
+	withdraw    WithdrawFunc         // optional: on-chain withdrawal (transfer hub)
+	optMarket   *optmarket.Market    // optional: EAPI options market-data surface (CR-9)
+	bookRef     *orderbook.OrderBook // engine book (AttachHooks) — option-settle list/cancel
+
+	// Option-settle diagnostics: log a sweep message once per process
+	// (a flapping broken exotic retries at the 1s cadence but reports once).
+	settleLogMu   sync.Mutex
+	settleLogSeen map[string]struct{}
 }
 
 // WithdrawFunc debits this venue's ledger and sends an on-chain payment of
@@ -135,12 +142,13 @@ func (s *Server) sleepAck(ctx context.Context) {
 // registry's OnTrade/OnCancel hooks onto the order book (see AttachHooks).
 func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Registry, opts ...Option) *Server {
 	s := &Server{
-		engine:   engine,
-		symbols:  symbols,
-		auth:     auth,
-		registry: registry,
-		mux:      http.NewServeMux(),
-		now:      time.Now,
+		engine:        engine,
+		symbols:       symbols,
+		auth:          auth,
+		registry:      registry,
+		mux:           http.NewServeMux(),
+		now:           time.Now,
+		settleLogSeen: map[string]struct{}{},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -181,6 +189,8 @@ func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Regis
 		s.mux.HandleFunc("/eapi/v1/mark/exotic", s.handleOptionExoticMark)
 		s.mux.HandleFunc("/eapi/v1/depth", s.handleOptionDepth)
 		s.mux.HandleFunc("/eapi/v1/index", s.handleOptionIndex)
+		s.mux.HandleFunc("/eapi/v1/order", s.handleOptionOrder) // POST place / GET query / DELETE cancel (SIGNED)
+		s.mux.HandleFunc("/eapi/v1/orders", s.optionOpenOrders) // GET working option orders (SIGNED)
 	}
 
 	s.handler = s.middleware(s.mux)
@@ -197,6 +207,8 @@ func (s *Server) Handler() http.Handler { return s.handler }
 // executionReport, so it must run after the registry has folded the
 // trade/cancel into the record. A caller wires this once at startup.
 func (s *Server) AttachHooks(book *orderbook.OrderBook) {
+	s.bookRef = book
+
 	// 1) Registry hook: update per-order fill/cancel state.
 	book.RegisterHook(func(evt string, data interface{}) {
 		switch evt {
@@ -243,14 +255,23 @@ func (s *Server) AttachHooks(book *orderbook.OrderBook) {
 			case "trade":
 				if t, ok := data.(*orderbook.Trade); ok {
 					for _, id := range []string{t.BuyOrderID, t.SellOrderID} {
-						if isEdgeOrder(id) {
+						if !isEdgeOrder(id) {
+							continue
+						}
+						if rec, ok := s.registry.getByEngine(id); ok && s.isOptionSym(rec.EngineSymbol) {
+							s.settleOptionFill(id, id == t.BuyOrderID, t.Volume, t.Price)
+						} else {
 							s.settleFill(id, id == t.BuyOrderID, t.Volume, t.Price)
 						}
 					}
 				}
 			case "cancel":
 				if o, ok := data.(*orderbook.Order); ok && isEdgeOrder(o.ID) {
-					s.unlockRemainder(o.ID)
+					if rec, ok := s.registry.getByEngine(o.ID); ok && s.isOptionSym(rec.EngineSymbol) {
+						s.unlockOptionRemainder(o.ID)
+					} else {
+						s.unlockRemainder(o.ID)
+					}
 				}
 			}
 		})
@@ -286,6 +307,36 @@ func (s *Server) unlockRemainder(engineID string) {
 	} else {
 		s.ledger.Unlock(base, remaining)
 	}
+}
+
+// unlockOptionRemainder releases the reservation still held by a cancelled
+// LIMIT option order's unfilled remainder. A contract BUY reserved QUOTE
+// (price·qty); a contract SELL reserved CONTRACT UNITS (qty).
+func (s *Server) unlockOptionRemainder(engineID string) {
+	rec, ok := s.registry.getByEngine(engineID)
+	if !ok || s.ledger == nil || rec.Type != "LIMIT" {
+		return
+	}
+	remaining := rec.OrigQty.Sub(rec.ExecutedQty)
+	if remaining.Sign() <= 0 {
+		return
+	}
+	quote, contractAsset := s.optionAssets(rec.EngineSymbol)
+	if rec.Side == "BUY" {
+		s.ledger.Unlock(quote, remaining.Mul(rec.Price))
+	} else {
+		s.ledger.Unlock(contractAsset, remaining)
+	}
+}
+
+// optionAssets resolves a listed option symbol's (quote, contractAsset) pair.
+func (s *Server) optionAssets(sym string) (quote, asset string) {
+	if om := s.optMarket; om != nil {
+		if q, a, ok := om.QuoteAndAsset(sym); ok {
+			return q, a
+		}
+	}
+	return "USDT", "OTC:" + sym
 }
 
 // isEdgeOrder reports whether an engine order id originates from the Binance

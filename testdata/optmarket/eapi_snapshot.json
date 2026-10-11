@@ -44,7 +44,11 @@
         "side": "CALL",
         "unit": 1,
         "priceScale": 2,
-        "quantityScale": 2
+        "quantityScale": 2,
+        "exerciseStyle": "european",
+        "settlement": "cash",
+        "indexRule": "point_in_time",
+        "multiplier": 1
       },
       {
         "symbol": "BTC-261231-40000-P",
@@ -55,7 +59,11 @@
         "side": "PUT",
         "unit": 1,
         "priceScale": 2,
-        "quantityScale": 2
+        "quantityScale": 2,
+        "exerciseStyle": "european",
+        "settlement": "cash",
+        "indexRule": "point_in_time",
+        "multiplier": 1
       },
       {
         "symbol": "BTC-261231-50000-C",
@@ -66,7 +74,11 @@
         "side": "CALL",
         "unit": 1,
         "priceScale": 2,
-        "quantityScale": 2
+        "quantityScale": 2,
+        "exerciseStyle": "european",
+        "settlement": "cash",
+        "indexRule": "point_in_time",
+        "multiplier": 1
       },
       {
         "symbol": "BTC-261231-50000-P",
@@ -77,7 +89,11 @@
         "side": "PUT",
         "unit": 1,
         "priceScale": 2,
-        "quantityScale": 2
+        "quantityScale": 2,
+        "exerciseStyle": "european",
+        "settlement": "cash",
+        "indexRule": "point_in_time",
+        "multiplier": 1
       },
       {
         "symbol": "BTC-261231-60000-C",
@@ -88,7 +104,11 @@
         "side": "CALL",
         "unit": 1,
         "priceScale": 2,
-        "quantityScale": 2
+        "quantityScale": 2,
+        "exerciseStyle": "european",
+        "settlement": "cash",
+        "indexRule": "point_in_time",
+        "multiplier": 1
       },
       {
         "symbol": "BTC-261231-60000-P",
@@ -99,7 +119,11 @@
         "side": "PUT",
         "unit": 1,
         "priceScale": 2,
-        "quantityScale": 2
+        "quantityScale": 2,
+        "exerciseStyle": "european",
+        "settlement": "cash",
+        "indexRule": "point_in_time",
+        "multiplier": 1
       }
     ]
   },

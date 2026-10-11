@@ -66,6 +66,19 @@ func errDuplicateOrder() *apiError {
 	return &apiError{Code: -2010, Msg: "Duplicate order sent.", status: http.StatusBadRequest}
 }
 
+// errPriceNotWithinBands rejects an option limit price outside the contract's
+// mark band (highPriceLimit/lowPriceLimit) — the EAPI price-limit discipline.
+func errPriceNotWithinBands() *apiError {
+	return &apiError{Code: -4164, Msg: "Price not within specified band.", status: http.StatusBadRequest}
+}
+
+// errContractSettled rejects order entry on an option contract at or after
+// its settlement instant (or after the expiry sweep has settled it): there
+// is no book to rest in and no settlement left to collect.
+func errContractSettled() *apiError {
+	return &apiError{Code: -4169, Msg: "Option expired or already settled.", status: http.StatusBadRequest}
+}
+
 // errTooManyRequests is the Binance rate-limit error (-1003) with HTTP 429.
 func errTooManyRequests() *apiError {
 	return &apiError{Code: codeTooManyRequests, Msg: "Too many requests.", status: http.StatusTooManyRequests}

@@ -154,9 +154,31 @@ All three mirror recorded inputs and goldens from the examples checkout
      saga price for the same payoff/spot/knobs to MC tolerance, sat below the
      plain vanilla call, was uncrossed, and carried pricer provenance.
 
-3. **Option order entry + exercise/settle for the EAPI option instruments**
-   (per the options architecture notes: `Instrument` → `ContractSpec` with
-   style/settlement/multiplier/payoff, then place/cancel at EAPI + venues, then an
-   expiry sweep settling cash at intrinsic off the index rule).
+3. **Option order entry + exercise/settle for the EAPI option instruments — DONE.**
+   `optmarket.Instrument` now carries a `ContractSpec` (exercise style /
+   settlement mode / index rule / multiplier) alongside its price coordinates —
+   only the implemented shape (european / cash / point_in_time / multiplier 1)
+   is listed, and it is surfaced on `GET /eapi/v1/exchangeInfo`. A listed contract
+   is ONE ledger asset (`OTC:<symbol>`) traded against the quote asset: a BUY
+   mints contract units against the quote, a SELL redeems them. Option orders
+   are real `LIMIT` orders on the **same engine book** as the spot pairs (the
+   exchange registers the option symbols at boot), so matching, fills, the WAL
+   and the edges' WS `executionReport` flow are all reused. Order entry is
+   served on the Binance EAPI edge: `POST /eapi/v1/order` (place, signed,
+   price-banded, idempotent on `newClientOrderId`), `GET /eapi/v1/order`
+   (query) and `DELETE /eapi/v1/order` (cancel), `GET /eapi/v1/orders`
+   (working orders). At the settlement instant an expiry sweep (1s ticker)
+   cancels every resting option order and settles CASH in the quote asset at the
+   contract's settlement value — a vanilla at its OWN intrinsic off the index
+   rule, an exotic at its OWN payoff's fresh T=0 terminal (re-priced through the
+   attached Pricer, never a vanilla leg). A vanilla missing its settlement index
+   or an exotic whose payoff doesn't price is LEFT UNSETTLED for the next pass
+   (no fabricated index or terminal value = no minted strike) — the expired
+   contract asset is BURNED once its held units are cashed, so worthless paper
+   never lingers in the account, and an order cannot be entered after the
+   contract's settlement instant. Rests racing in around a settle tick are
+   drained by the next tick. Unit + live E2E green (signed place→query→
+   openOrders→cancel round-trip against the real boot; duplicate id rejected,
+   post-expiry entry rejected, burn verified at settle).
 4. **CI golden** for saga-priced scenarios, once an uncapped, bit-identical engine
    dev build is available (tests compare at 1e-3 rel like the examples harness).

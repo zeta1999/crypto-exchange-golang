@@ -94,6 +94,17 @@ func New(instruments []string) *OrderBook {
 	return &OrderBook{instruments: inst, now: time.Now}
 }
 
+// Register adds an instrument that was not known at construction time (e.g.
+// the options book's listed symbols, which are wired after startup). Safe for
+// concurrent use; a duplicate is a no-op.
+func (b *OrderBook) Register(instrument string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.instruments[instrument]; !ok {
+		b.instruments[instrument] = &instrumentBook{}
+	}
+}
+
 // SetClock overrides the timestamp source for trades (Trade.ExecutedAt). The
 // default is time.Now; injecting a deterministic clock makes a replay/scenario
 // run reproducible bit-for-bit (the golden tests rely on this). Call before
@@ -120,9 +131,20 @@ func (b *OrderBook) fire(evt string, data interface{}) {
 	}
 }
 
+// lookup returns the per-instrument book under the map's read lock. The
+// instruments map is written by Register (option symbols are registered after
+// boot), so every reader goes through this — a raw b.instruments[x] read
+// racing a Register is a map-write/read race.
+func (b *OrderBook) lookup(symbol string) (*instrumentBook, bool) {
+	b.mu.RLock()
+	book, ok := b.instruments[symbol]
+	b.mu.RUnlock()
+	return book, ok
+}
+
 // AddLimitOrder inserts a limit order and attempts immediate matches.
 func (b *OrderBook) AddLimitOrder(ord *Order) ([]*Trade, error) {
-	book, ok := b.instruments[ord.Instrument]
+	book, ok := b.lookup(ord.Instrument)
 	if !ok {
 		return nil, ErrUnknownInstrument
 	}
@@ -157,7 +179,7 @@ func (b *OrderBook) ExecuteMarketOrder(ord *Order) ([]*Trade, error) {
 // place-then-cancel sequence) no transient order is ever visible to other
 // actors. Used by the tape replay: a tape print is a taker, not a maker.
 func (b *OrderBook) ExecuteLimitIOC(ord *Order) ([]*Trade, error) {
-	book, ok := b.instruments[ord.Instrument]
+	book, ok := b.lookup(ord.Instrument)
 	if !ok {
 		return nil, ErrUnknownInstrument
 	}
@@ -175,7 +197,7 @@ func (b *OrderBook) ExecuteLimitIOC(ord *Order) ([]*Trade, error) {
 
 // CancelOrder removes a resting order by identifier if present.
 func (b *OrderBook) CancelOrder(symbol, orderID string) (*Order, error) {
-	book, ok := b.instruments[symbol]
+	book, ok := b.lookup(symbol)
 	if !ok {
 		return nil, ErrUnknownInstrument
 	}
@@ -192,9 +214,34 @@ func (b *OrderBook) CancelOrder(symbol, orderID string) (*Order, error) {
 	return nil, ErrOrderNotFound
 }
 
+// OpenOrders returns the orders currently RESTING on the instrument (bids in
+// price-time order, then asks) as VALUE COPIES: matching mutates resting
+// Volume while orders rest, so callers get a consistent snapshot, never a
+// pointer the book may later mutate. (The Metadata map is shared.) Used by
+// cancel-everything sweeps (e.g. the options expiry settle) and for
+// inspection.
+func (b *OrderBook) OpenOrders(symbol string) []*Order {
+	book, ok := b.lookup(symbol)
+	if !ok {
+		return nil
+	}
+	book.mu.RLock()
+	defer book.mu.RUnlock()
+	out := make([]*Order, 0, len(book.bids.orders)+len(book.asks.orders))
+	for _, o := range book.bids.orders {
+		c := *o
+		out = append(out, &c)
+	}
+	for _, o := range book.asks.orders {
+		c := *o
+		out = append(out, &c)
+	}
+	return out
+}
+
 // Snapshot returns a copy of the current book state for the instrument.
 func (b *OrderBook) Snapshot(symbol string) (*Snapshot, error) {
-	book, ok := b.instruments[symbol]
+	book, ok := b.lookup(symbol)
 	if !ok {
 		return nil, ErrUnknownInstrument
 	}

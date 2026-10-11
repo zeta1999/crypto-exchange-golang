@@ -101,7 +101,8 @@ type Book struct {
 	Asks     []Level
 }
 
-// Contract is one listed option, venue-neutral.
+// Contract is one listed option, venue-neutral. It carries the price
+// coordinates and the settlement spec (ContractSpec) the venue settles by.
 type Contract struct {
 	Symbol        string
 	Underlying    string
@@ -112,6 +113,11 @@ type Contract struct {
 	Unit          int
 	PriceScale    int
 	QuantityScale int
+	// Settlement terms (see ContractSpec).
+	ExerciseStyle string  // "european"
+	Settlement    string  // "cash"
+	IndexRule     string  // "point_in_time"
+	Multiplier    float64 // per-contract multiplier (1 = per coin)
 }
 
 // Spot is the index print for an underlying.
@@ -155,6 +161,11 @@ type Market struct {
 
 	exoticMu    sync.RWMutex // guards exoticBySym (the Market itself is immutable after build)
 	exoticBySym map[string]exoticCacheEntry
+
+	// Expiry sweep (Settle): settled-by-symbol idempotency + audit trail.
+	settleMu    sync.Mutex
+	settled     map[string]bool
+	settlements []Settlement
 }
 
 type leg struct {
@@ -185,6 +196,7 @@ func NewMarket(now func() time.Time, index IndexFunc, rate, ivSpread, bookHalf, 
 		ivSpread: ivSpread, bookHalf: bookHalf, priceCap: priceCap,
 		bySymbol: map[string]Instrument{}, legs: map[string]leg{},
 		exotics: map[string]Exotic{}, exoticBySym: map[string]exoticCacheEntry{},
+		settled: map[string]bool{},
 	}
 }
 
@@ -429,6 +441,45 @@ func (m *Market) priceExoticNow(sym string) (Mark, error) {
 	}, nil
 }
 
+// IsListed reports whether `sym` is a listed option symbol (a vanilla
+// Black–Scholes instrument or a flow exotic). Used by the trading edge to
+// accept order entry only for real contracts, and by the settlement path to
+// recognize option fills.
+func (m *Market) IsListed(sym string) bool {
+	if _, ok := m.bySymbol[sym]; ok {
+		return true
+	}
+	_, ok := m.exotics[sym]
+	return ok
+}
+
+// ExpiryOf returns the settlement instant of one listed option symbol (vanilla
+// or exotic), or false if the symbol is not listed. The trading edge uses it
+// to reject order entry on an expired or already-settled contract.
+func (m *Market) ExpiryOf(sym string) (time.Time, bool) {
+	if in, ok := m.bySymbol[sym]; ok {
+		return in.Expiry, true
+	}
+	if ex, ok := m.exotics[sym]; ok {
+		return ex.Expiry, true
+	}
+	return time.Time{}, false
+}
+
+// QuoteAndAsset returns the quote (cash-settlement) asset and the ledger
+// contract asset for one listed option symbol, and false if the symbol is not
+// listed. A traded contract is ONE ledger asset ("OTC:"+symbol): a buy mints
+// it against the quote asset, a sell redeems it the other way.
+func (m *Market) QuoteAndAsset(sym string) (quote, contractAsset string, ok bool) {
+	if in, ok2 := m.bySymbol[sym]; ok2 {
+		return in.Quote, "OTC:" + sym, true
+	}
+	if ex, ok2 := m.exotics[sym]; ok2 {
+		return ex.Quote, "OTC:" + sym, true
+	}
+	return "", "", false
+}
+
 // AddInstrument registers an instrument (idempotent by internal symbol).
 func (m *Market) AddInstrument(in Instrument) {
 	sym := in.Symbol()
@@ -624,6 +675,10 @@ func (m *Market) Contracts() []Contract {
 			Unit:          1,
 			PriceScale:    2,
 			QuantityScale: 2,
+			ExerciseStyle: in.Spec.Exercise,
+			Settlement:    in.Spec.Settlement,
+			IndexRule:     in.Spec.IndexRule,
+			Multiplier:    in.Spec.EffectiveMultiplier(),
 		})
 	}
 	for _, sym := range m.exoticOrder {
@@ -642,6 +697,10 @@ func (m *Market) Contracts() []Contract {
 			Unit:          1,
 			PriceScale:    2,
 			QuantityScale: 2,
+			ExerciseStyle: "european",
+			Settlement:    "cash",
+			IndexRule:     "point_in_time",
+			Multiplier:    1,
 		})
 	}
 	return out

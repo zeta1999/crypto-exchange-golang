@@ -24,7 +24,7 @@ fail() { printf "%s[FAIL]%s %s\n" "$RED" "$RESET" "$1"; exit 1; }
 step "gofmt (formatting check)"
 # Exclude generated protobuf under grpc/ by filtering the file list BEFORE gofmt,
 # so we never rely on grep's exit code (no-match => exit 1) under `set -e`/pipefail.
-gofmt_targets=$(find . -name '*.go' -not -path './grpc/*' -not -path './.codegraph/*')
+gofmt_targets=$(find . -name '*.go' -not -path './grpc/*' -not -path './.codegraph/*' -not -path './.stash/*')
 unformatted=$(gofmt -l $gofmt_targets 2>/dev/null)
 if [ -n "$unformatted" ]; then
   printf "These files are not gofmt-clean:\n%s\n" "$unformatted"
