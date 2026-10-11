@@ -58,7 +58,7 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] brutal review + fixes (JSON quote-strip, FromFloat non-finite, perf TODOs)
 - [x] (perf) Mul → allocation-free 128-bit limb math (PLAN §9.7); oracle-validated, 0 allocs/op + benchmark
 - [x] (perf) Div → allocation-free 256÷128 binary long division; oracle-validated, 0 allocs/op + boundary tests (PLAN §9.7). pkg/decimal now fully allocation-free.
-- [ ] (optional) float64-backed backend behind same API for A/B + fast mode
+- [x] (optional) float64-backed backend behind same API for A/B + fast mode — `pkg/decimal/decimal_float64.go`, selected with `-tags decimal_float64`: a concrete comparable float64-backed `Decimal` behind a type alias (`type Decimal = FloatDecimal`), mutually exclusive build tags with the exact core; the SAME public API (Parse/MustParse/FromFloat/FromInt/Add/Sub/Neg/Mul/Div/MulFloat/Abs/Sign/IsZero/Cmp/Eq/Lt/Lte/Gt/Gte/Min/Max/String/Prec/JSON/map-key) so the entire module compiles + vets byte-for-byte unchanged under both tags — the switch is the one build-tag line (PLAN §9.7). Semantics are deliberately float64-loose (documented): no fixed-point scale, float64 rounding, Div-by-zero/non-finite still panic, NaN pinned to a deterministic total order for map-key safety. Validated: float unit tests (bit-identity vs plain float64 arithmetic over a 14-value grid incl. non-dyadic magnitudes, parse-grammar parity with the exact backend, JSON round-trip, map-key/Eq, 0-alloc ops) + A/B benchmarks (BenchmarkFloatMul/AddDiv vs the exact core's) + the full suite under the tag. CI: ci.sh gained a float64 A/B stage (build+vet+test -tags decimal_float64; -skip only the 2 bit-exact golden tests that legitimately assert exact decimal strings: emulator TestScenarioGoldenFile, transfer TestHubWithdrawQuantizes). Default CI is byte-identical (no tag → exact core).
 - [x] migration (PLAN.md §9.8): matching core (orderbook/engine/margin) → reference (parses feed decimal strings) → emulator → API edges convert at boundary; feed stays float64. CI green; live-verified (HTTP emits exact decimal strings). Follow-up: exact alpha=1 snap + 1e-9 convergence tolerance.
 
 ## Phase 5 — Trade replay sync
@@ -155,8 +155,12 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] Coinbase **true level2 incremental diffs** — `level2Differ` emits snapshot + changed-levels
       updates (removals as new_quantity "0"); snapshot-first ordering, miss-free (`TestLevel2Differ`,
       `TestWSLevel2Incremental`). Reviewed.
-- [ ] (follow-up) live broadcast/verification of EVM/SOL/BTC sends (faucet/captcha-gated, unverifiable
-      offline).
+- [~] **(DEFERRED — tracked, deliberately not done)** live broadcast/verification of EVM/SOL/BTC sends
+      (faucet/captcha-gated, unverifiable offline). The code is complete (send path + watch/credit of
+      received assets are vector/RPC-tested), but the outgoing broadcast + on-chain broadcast
+      confirmation is blocked by faucet/captcha flows that cannot be exercised offline, so this is
+      explicitly deferred rather than claimed done. Re-verify with a funded testnet faucet when
+      available.
 
 ## Phase 11 — Hardening & observability
 - [x] Prometheus-text metrics (`internal/metrics`, dependency-free): orders/trades/cancels by edge, feed events, converge/RTR/tape/toxicity, per-instrument synthetic/anomalies/crossings/stale/VPIN/λ gauges; `:9090/metrics`
@@ -177,4 +181,14 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] (CR-10) live E2E smoke (skip-gated): real server + saga plugin — z→S priced, confirmed D → NEW at quoted price into the emulator book, reuse → Rejected, plus an ATM-adjacent down-and-out barrier whose quote midpoint tracks an independent saga barrier reference within 5% and stays below the plain vanilla call
 - [x] (follow-up) option order entry + exercise/settle (per options architecture: `Instrument`→`ContractSpec`, then place/cancel at EAPI + venues, expiry cash-settle) — `optmarket.Instrument` now carries a `ContractSpec` (exercise style / settlement mode / index rule / multiplier; only european/cash/point_in_time/mult=1 is implemented, listed in `exchangeInfo`); a listed contract is ONE ledger asset (`OTC:<sym>`) traded against the QUOTE asset; option orders are real `LIMIT` orders on the SAME engine book as spot pairs (POST/GET/DELETE `/eapi/v1/order` + GET `/eapi/v1/orders`, signed, price-banded, CR-5 idempotent, WS `executionReport` reused); the expiry sweep (1s ticker in `cmd/exchange`) cancels every resting option order and settles CASH in the quote asset at intrinsic (vanilla) / fresh payoff terminal (exotic — through the attached Pricer, never a vanilla leg) in the same ledger that minted the positions; a missing settlement index or an unpricable payoff is LEFT UNSETTLED for the next pass (no fabricated index/terminal value — a fabricated index=0 would credit a put its full strike), the expired contract asset is BURNED once its held units are cashed, and order entry is rejected at/after the settlement instant. Unit (contract spec, place/query/cancel, matching ledger, band, settle-sweep idempotency + race-drain + no-fabricated-zero) + **live E2E** (real server: signed place→query→openOrders→cancel lifecycle, duplicate-id rejection, post-expiry entry rejection) green
 - [x] (follow-up) dealer-quoting mode of optmarket (same `Pricer` seam): `Market.AttachPricer` lists flow exotics beside the vanilla Black–Scholes chain on the shared EAPI book — each exotic priced **once per `exotic_ttl`** against its **actual configured payoff** (saga plugin; never vanilla legs) at the underlying index; `bid/offer` bracket the single fair value by `exotic_spread_bps`; `GET /eapi/v1/mark/exotic` returns fair + bracket + `pricer`/`model` provenance with IV/greeks left 0, vanilla `/eapi/v1/mark` stays vanilla-only; risk limit `exotic_max_fair_value` + negative caching (broken/outrageous payoff → no minted call, no quote); missing saga binary is a boot warning, not a failure (vanilla chain still serves). Config `options.exotics[]` + `options.pricer/exotic_*`; unit (mock Pricer: single-call, bracketed fair, cache, per-exotic overrides, surface-vol fallback, risk limit, negative cache, validation) + **live E2E** green (skip-gated, offline: real server exotic mark matches an independent saga reference to MC tolerance, below the plain vanilla call, uncrossed, provenance present)
-- [ ] (follow-up) CI golden: pin a saga-priced scenario once an uncapped, bit-identical engine dev build is available
+- [x] (follow-up) CI golden: pin a saga-priced scenario — unblocked via the **deterministic PDE
+      reference** for the barrier product class (no uncapped bit-identical MC engine required).
+      `TestSaga_BarrierPDEGolden` (internal/pricer/saga) drives `AriaPDEPriceLV/1`
+      (`pde_lv_barrier`, Crank–Nicolson; S=K=100, B=80, flat σ=0.30, r=0.05, T=1 — the
+      examples/02-exotics/barrier-pde-localvol scenario) through the saga plugin, whose
+      vanilla-script inference now only fires when no endpoint is selected, so PDE requests
+      route clean. The gate is float-to-float at **1e-8 rel** vs the recorded deterministic
+      golden 13.244937327991609 (measured cross-build drift ~2.6e-13 ⇒ ~40,000× margin, vs the
+      1e-3 MC gate) *plus* a 1e-4 anchor on the independent Reiner–Rubinstein closed-form
+      13.244869 — so it pins correctness, not just stability. Bit-exact MC golden stays deferred
+      (RNG/cap) — this is the class of the "uncapped reference" the item was waiting on.

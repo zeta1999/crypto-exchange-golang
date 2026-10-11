@@ -1,3 +1,5 @@
+//go:build !decimal_float64
+
 package decimal
 
 import (

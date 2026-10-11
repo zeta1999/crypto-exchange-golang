@@ -292,8 +292,13 @@ func buildRequest(p pricer.Params) (string, map[string]any, error) {
 	if p.Script != "" && p.ScriptFile != "" {
 		return "", nil, fmt.Errorf("saga: set Script OR ScriptFile, not both")
 	}
-	if p.Script == "" && p.ScriptFile == "" {
-		// Documented vanilla shape: infer the payoff from strike/side.
+	if p.Script == "" && p.ScriptFile == "" && p.Model == "" {
+		// Documented vanilla shape: infer the payoff from strike/side. Only
+		// when the caller has NOT selected an endpoint explicitly (p.Model
+		// empty): explicit-model callers — including pass-through endpoints
+		// like AriaPDEPriceLV whose arguments carry the payoff as
+		// strike/isCall/barrier and which reject an inline `script` — are
+		// fully responsible for the request shape.
 		// (p is a copy of the caller's Params — buildRequest never mutates
 		// the incoming struct.)
 		if p.Strike <= 0 {

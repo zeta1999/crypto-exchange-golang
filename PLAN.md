@@ -339,13 +339,32 @@ feed already preserves the venue's exact strings (`PriceDecimal`/`QuantityDecima
 ### 9.7 Backends (optional; mirrors the reference Int128 / Wide / Double variants)
 - **Exact (default):** 128-bit storage with 256-bit mul/div intermediates — always
   overflow-safe (the reference's "Wide" behavior; we do **not** ship the overflow-prone
-  128-bit-only multiply).
+  128-bit-only multiply). Implemented & shipped (`pkg/decimal/decimal.go`), fully
+  allocation-free (`math/bits` limbs), oracle-validated.
 - **Float (optional):** a `float64`-backed type behind the same interface/alias for A/B
   benchmarking and a deliberately fast/loose mode. Keep callers backend-agnostic via an
   interface or build-tagged alias so the choice is one line.
+  **Shipped** (`pkg/decimal/decimal_float64.go`): an interface was ruled out on design —
+  `Decimal` is used as a **map key** (`reference.Book` levels, fill maps) and `Eq` is
+  structural identity, which only a concrete comparable type can satisfy. The build-tagged
+  alias the section anticipated is what landed: `decimal_float64.go` (guarded
+  `//go:build decimal_float64`) defines a concrete comparable `type FloatDecimal struct{f
+  float64}` and `type Decimal = FloatDecimal`; `decimal.go`/`decimal[_test].go` carry the
+  inverse `//go:build !decimal_float64`. Same exported symbols ⇒ the **entire module
+  compiles and vets identically** under `-tags decimal_float64` with zero call-site edits
+  (verified in CI); the tag is the one-line switch and the default build is untouched.
+  Semantics are deliberately loose (documented on the type): raw float64 arithmetic with
+  round-to-nearest (no fixed-point scale), Div-by-zero & non-finite FromFloat still panic,
+  NaN pinned to a deterministic total order (above all values) so it stays a safe map key.
+  A/B: float unit tests assert bit-identity against raw float64 ops on a 14-value grid
+  (incl. non-dyadic magnitudes), parse-grammar parity with the exact backend, JSON/map-key
+  round-trips, and 0-alloc ops; `BenchmarkFloatMul`/`BenchmarkFloatAddDiv` benchmark against
+  the exact core. `ci.sh` runs the full suite under the tag (only the two bit-exact exact
+  golden tests, which legitimately assert exact decimal strings, are -skip'd).
 - **Implementation order:** ship a correct-but-simple first cut using `math/big.Int` for the
   256-bit intermediate in `Mul`/`Div` (allocates), behind the final API; then replace the hot
-  paths with allocation-free 64-bit-limb math (`math/bits`) and benchmark.
+  paths with allocation-free 64-bit-limb math (`math/bits`) and benchmark. Completed for the
+  Exact backend; the Float backend is trivially alloc-free.
 
 ### 9.8 Migration (large, cross-cutting — sequence carefully)
 1. Land `pkg/decimal` with full tests (no callers yet).

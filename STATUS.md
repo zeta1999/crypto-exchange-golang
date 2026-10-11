@@ -1,6 +1,6 @@
 # STATUS
 
-_Last updated: 2026-10-11 (options: dealer-quoting mode + option order entry / exercise / cash-settle)_
+_Last updated: 2026-10-11 (float64 decimal backend (A/B) + barrier PDE CI golden @1e-8; live EVM/SOL/BTC send broadcast DEFERRED)_
 
 ## Current phase
 **Runnable product + exact decimals** ✅ — `go run ./cmd/exchange` boots a live Coinbase-mirroring
@@ -144,11 +144,18 @@ Set `emulator.enabled: false` for a plain offline matching engine.
   order entry is real `LIMIT` entries on the shared engine book.
 
 ## Blocked / waiting
-- CI golden for saga-priced scenarios: needs an uncapped, bit-identical engine dev build.
+- (DEFERRED) Live broadcast/verification of EVM/SOL/BTC sends — code complete, but the
+  outbound broadcast + on-chain confirmation can only be proven against live
+  faucet/captcha flows; explicitly deferred, tracked in TODO.md.
 
-## Next actions
-1. CI golden for saga-priced scenarios once an uncapped, bit-identical engine
-   dev build is available (tests currently pin at the examples harness's 1e-3
-   rel tolerance).
-2. (optional, Phase D) float64-backed backend behind the same decimal API for
-   A/B + fast mode.
+## Done since 2026-10-11
+1. **Barrier CI golden** — `TestSaga_BarrierPDEGolden`: deterministic PDE reference
+  (`AriaPDEPriceLV/1` `pde_lv_barrier`) gated float-vs-float at **1e-8 rel** against the
+  recorded golden, plus a 1e-4 cross-anchor on the Reiner–Rubinstein closed-form
+  (13.244869). Unblocks the saga CI-golden item without a bit-identical MC build.
+2. **float64 decimal backend** (PLAN §9.7 "Float" variant, A/B): build-tag selected
+  (`-tags decimal_float64`), concrete comparable float64 type behind a type alias,
+  identical API — the module compiles + vets unchanged under both tags; float unit
+  tests (bit-identity vs raw float64 ops) + A/B benchmarks; ci.sh A/B stage.
+3. Saga plugin: vanilla-script inference only when no endpoint selected → PDE
+  pass-through routes clean.

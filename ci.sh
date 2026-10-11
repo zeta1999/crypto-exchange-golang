@@ -52,4 +52,20 @@ step "go test ./... -race -count=1 -timeout=120s"
 go test ./... -race -count=1 -timeout=120s || fail "go test"
 ok "tests pass"
 
+step "float64 decimal backend A/B (build + vet + test -tags decimal_float64)"
+# The float64 back-end (pkg/decimal, PLAN §9.7) must keep the WHOLE module
+# compiling and vet-clean with zero call-site changes, and its tests must pass:
+# that is the "callers are backend-agnostic" contract. Run the full test suite
+# under the tag except two bit-exact golden tests that legitimately assert
+# exact decimal strings (the float back-end is deliberately loose):
+#   TestScenarioGoldenFile (emulator), TestHubWithdrawQuantizes (transfer).
+# Any NEW failure there means the back-end introduced a type-level or
+# semantic regression and blocks the gate.
+go build -tags decimal_float64 ./... || fail "float64 build"
+go vet -tags decimal_float64 ./... || fail "float64 vet"
+go test -tags decimal_float64 -race -count=1 -timeout=300s \
+  -skip 'TestHubWithdrawQuantizes|TestScenarioGoldenFile' \
+  ./... || fail "float64 test"
+ok "float64 back-end A/B clean"
+
 printf "\n%sCI PASSED%s\n" "$GREEN" "$RESET"

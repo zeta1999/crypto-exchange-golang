@@ -1,3 +1,5 @@
+//go:build !decimal_float64
+
 // Package decimal provides an exact base-10 fixed-point number for market
 // prices and quantities. A Decimal has 18 fractional digits and is stored as
 // a signed 128-bit integer of scaled units (value = raw / 10^18), so decimal
