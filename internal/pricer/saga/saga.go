@@ -93,6 +93,34 @@ func (w *cappedWriter) String() string {
 // Name implements pricer.Pricer.
 func (s *Saga) Name() string { return name }
 
+// Probe reports whether this instance can actually start the engine binary
+// (root + binary resolve), without launching it. It returns the resolved
+// (root, bin) and a nil error when ready; a non-nil error names the first
+// thing missing. Callers use it to degrade gracefully (or fail fast) BEFORE
+// a pricing request would discover the problem — e.g. the exchange's
+// dealer-quoting mode. Resolution is identical to Price.
+func (s *Saga) Probe() (root, bin string, err error) {
+	root = s.Root
+	if root == "" {
+		root = os.Getenv("SIBELIUS_SAMPLES_ROOT")
+	}
+	if root == "" {
+		if root, err = defaultRoot(); err != nil {
+			return "", "", err
+		}
+	}
+	bin = s.Bin
+	if bin == "" {
+		bin = os.Getenv("SAGA_BIN")
+	}
+	if bin == "" {
+		if bin, err = defaultBin(root); err != nil {
+			return "", "", err
+		}
+	}
+	return root, bin, nil
+}
+
 // Price implements pricer.Pricer. On engine failure the temp dir holding the
 // exact request payload is preserved and its path reported, so a failed
 // deterministic request can be replayed; it is removed only on success.

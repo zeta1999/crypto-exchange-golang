@@ -1,14 +1,17 @@
 package binance
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/zeta1999/crypto-exchange-golang/internal/optmarket"
+	"github.com/zeta1999/crypto-exchange-golang/internal/pricer"
 	"github.com/zeta1999/crypto-exchange-golang/pkg/options"
 )
 
@@ -141,6 +144,110 @@ func TestEAPI_UnknownSymbolErrors(t *testing.T) {
 		}
 		resp.Body.Close()
 	}
+}
+
+// eapiExoticMarket is optTestMarket with one flow exotic attached, so the
+// exotic endpoint can be exercised without the saga binary.
+func eapiExoticMarket() (*optmarket.Market, *mockEapiPricer) {
+	m := optTestMarket()
+	px := &mockEapiPricer{price: 1234.56}
+	reg := pricer.NewRegistry()
+	reg.Register(px)
+	if err := m.AttachPricer(reg, "mock", pricer.Params{Vol: 0.30, Rate: 0.03}, 5*time.Second, 0, 0.01); err != nil {
+		panic(err)
+	}
+	date := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+	ex := optmarket.NewExoticInstrument("BTC", "BTCUSDT", "USDT", 50000, options.Call, date, "BTC-261231-50000-BAR")
+	ex.PayoffFile = "payoffs/barrier_down_out_call.aria"
+	if err := m.AddExotic(ex); err != nil {
+		panic(err)
+	}
+	return m, px
+}
+
+func TestEAPI_MarkExotic(t *testing.T) {
+	m, px := eapiExoticMarket()
+	h := newHarness(t, WithOptionsMarket(m))
+
+	// The exotic mark endpoint: one element, executable bid/ask bracketing the
+	// MC fair value, IV/greeks zero, provenance present.
+	resp := h.get(t, "/eapi/v1/mark/exotic?symbol=BTC-261231-50000-BAR")
+	defer resp.Body.Close()
+	var out []ExoticMarkData
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("want 1 exotic mark, got %d", len(out))
+	}
+	e := out[0]
+	if e.Symbol != "BTC-261231-50000-BAR" || e.Pricer != "mock" {
+		t.Errorf("bad exotic mark provenance: %+v", e)
+	}
+	if e.MarkIV != "0.00000000" || e.BidIV != "0.00000000" || e.AskIV != "0.00000000" {
+		t.Errorf("exotic IV must be 0, got %+v", e)
+	}
+	if px.calls != 1 {
+		t.Errorf("exotic must be priced once per TTL, got %d calls", px.calls)
+	}
+
+	// /eapi/v1/mark stays vanilla-only: it rejects the exotic symbol and the
+	// all-marks list contains only the 6 vanilla contracts.
+	if r := h.get(t, "/eapi/v1/mark?symbol=BTC-261231-50000-BAR"); r.StatusCode == http.StatusOK {
+		t.Error("vanilla mark endpoint must reject an exotic symbol")
+		r.Body.Close()
+	} else {
+		r.Body.Close()
+	}
+	rAll := h.get(t, "/eapi/v1/mark")
+	defer rAll.Body.Close()
+	var all []MarkData
+	_ = json.NewDecoder(rAll.Body).Decode(&all)
+	if len(all) != 6 {
+		t.Errorf("/eapi/v1/mark must be vanilla-only (6), got %d", len(all))
+	}
+
+	// exchangeInfo lists the exotic contract too.
+	rInfo := h.get(t, "/eapi/v1/exchangeInfo")
+	defer rInfo.Body.Close()
+	var info ExchangeInfo
+	_ = json.NewDecoder(rInfo.Body).Decode(&info)
+	found := false
+	for _, s := range info.OptionSymbols {
+		if s.Symbol == "BTC-261231-50000-BAR" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("exotic contract missing from exchangeInfo")
+	}
+
+	// depth on the exotic is the executable quote itself (1 level per side,
+	// uncrossed).
+	rd := h.get(t, "/eapi/v1/depth?symbol=BTC-261231-50000-BAR")
+	defer rd.Body.Close()
+	var d Depth
+	_ = json.NewDecoder(rd.Body).Decode(&d)
+	if len(d.Bids) != 1 || len(d.Asks) != 1 {
+		t.Errorf("exotic depth must be the quote itself (1/1), got %d/%d", len(d.Bids), len(d.Asks))
+	}
+	bid, _ := strconv.ParseFloat(d.Bids[0][0], 64)
+	ask, _ := strconv.ParseFloat(d.Asks[0][0], 64)
+	if bid >= ask {
+		t.Errorf("exotic book crossed: bid=%v ask=%v", bid, ask)
+	}
+}
+
+// mockEapiPricer is a recording in-memory Pricer for the EAPI exotic endpoint.
+type mockEapiPricer struct {
+	price float64
+	calls int
+}
+
+func (m *mockEapiPricer) Name() string { return "mock" }
+func (m *mockEapiPricer) Price(_ context.Context, _ pricer.Params) (pricer.Result, error) {
+	m.calls++
+	return pricer.Result{Price: m.price}, nil
 }
 
 // Recorded golden: the full EAPI surface captured as a deterministic fixture.

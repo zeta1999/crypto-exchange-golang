@@ -23,6 +23,60 @@ instruments:
     quote: "USD"
 storage:
   wal_path: "data/exchange.wal"
+# Options book (CR-9 + dealer-quoting mode): one European cash-settled (USDT)
+# chain priced with the INTERNAL Black–Scholes model + per-underlying smile,
+# published on the Binance EAPI edge (here :8082) and, when `venues` is
+# extended, the Deribit/OKX/Bybit-compatible shapes too —
+# GET /eapi/v1/{exchangeInfo,mark,mark/exotic,depth,index}.
+#
+# Flow exotics: when `exotics` is non-empty the book holds the pricer plugin
+# (the saga binary from ../price-master-examples) and lists the exotics next
+# to the vanilla chain. Each exotic is priced AGAINST ITS ACTUAL payoff
+# (inline `payoff` script or `payoff_file` relative to that repo) — never
+# decomposed into vanilla legs — and /eapi/v1/mark/exotic returns the fair
+# value bracketed by exotic_spread_bps plus the pricer/model provenance.
+# A missing saga binary is a warning at boot, not a failure (the vanilla
+# chain keeps serving; exotic marks report no price until it is present).
+options:
+  enabled: true
+  rate: 0.03
+  iv_spread: 0.02
+  book_half_spread: 0.02
+  price_band: 0.5
+  venues:
+    - name: binance
+  underlyings:
+    - underlying: "BTCUSDT"
+      coin: "BTC"
+      quote: "USDT"
+      index_engine: "BTC-USD"     # live book mid is the index (emulator on)
+      static_index: 50000         # fallback when the book is empty
+      atm_vol: 0.65
+      skew: -0.05
+      smile: 0.10
+      expiries: ["2026-12-31"]
+      strikes: [40000, 50000, 60000]
+  # One flow exotic (down-and-out barrier call). The shipped payoff_file is a
+  # demo with K=100/B=80 (suited to ~$100 underlyings); at BTC spot it is
+  # instantly knocked out (fair <= 0 → an error, never a free instrument).
+  # For a live ATM-ish barrier, use an inline `payoff` (see api.fix.quotes).
+  pricer: "saga"
+  exotic_vol: 0.30
+  exotic_rate: 0.05
+  exotic_num_paths: 65536
+  exotic_num_steps: 252
+  exotic_seed: 42
+  exotic_expiry_years: 1.0
+  exotic_spread_bps: 10
+  exotic_ttl: "5s"
+  exotics:
+    - coin: "BTC"
+      underlying: "BTCUSDT"
+      expiry: "2026-12-31"
+      strike: 50000
+      kind: "C"
+      venue_symbol: "BTC-261231-50000-BAR"
+      payoff_file: "payoffs/barrier_down_out_call.aria"
 # Binance-spot-compatible REST edge (PLAN Phase 8 — a documented SUBSET). When
 # enabled, a stock Binance client (CCXT, python-binance) pointed at `listen`
 # with only the base URL changed can place/cancel/query orders and read

@@ -88,6 +88,34 @@ func TestValidateFIXTestYAML(t *testing.T) {
 	}
 }
 
+func TestValidateOptionsExoticValid(t *testing.T) {
+	cfg := validDev()
+	cfg.Options = OptionsConfig{
+		Enabled: true,
+		Pricer:  "saga",
+		Venues:  []VenueConfig{{Name: "binance"}},
+		Underlyings: []OptionUnderlying{
+			{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", StaticIndex: 50000, Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}},
+		},
+		Exotics: []ExoticConfig{
+			{Coin: "BTC", Underlying: "BTCUSDT", Expiry: "2026-12-31", Strike: 60000, Kind: "C",
+				VenueSymbol: "BTC-261231-60000-BAR", Payoff: "contract X { ... }", Vol: 0.3},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid exotic options config rejected: %v", err)
+	}
+	// Duplicate venue symbol must be caught.
+	cfg.Options.Exotics = append(cfg.Options.Exotics, cfg.Options.Exotics[0])
+	dupeErr := cfg.Validate()
+	if dupeErr == nil {
+		t.Fatal("duplicated exotic venue_symbol must be rejected")
+	}
+	if !strings.Contains(dupeErr.Error(), "duplicated") {
+		t.Fatalf("unexpected error: %v", dupeErr)
+	}
+}
+
 func TestValidateInvalid(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -149,6 +177,36 @@ func TestValidateInvalid(t *testing.T) {
 		{"fix bad engine", func(c *Config) {
 			c.API.FIX = FIXConfig{Enabled: true, Listen: ":8195", SenderCompID: "M", Symbols: []SymbolPair{{Binance: "BTCUSDT", Engine: "NOPE"}}}
 		}, "neither a configured instrument nor a quote-only exotic"},
+		{"options exotic no pricer", func(c *Config) {
+			c.Options = OptionsConfig{Enabled: true,
+				Underlyings: []OptionUnderlying{{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", StaticIndex: 50000, Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}}},
+				Exotics:     []ExoticConfig{{Coin: "BTC", Underlying: "BTCUSDT", Expiry: "2026-12-31", Strike: 60000, Payoff: "x"}}}
+		}, "pricer is required"},
+		{"options exotic no payoff", func(c *Config) {
+			c.Options = OptionsConfig{Enabled: true, Pricer: "saga",
+				Underlyings: []OptionUnderlying{{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", StaticIndex: 50000, Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}}},
+				Exotics:     []ExoticConfig{{Coin: "BTC", Underlying: "BTCUSDT", Expiry: "2026-12-31", Strike: 60000}}}
+		}, "payoff"},
+		{"options exotic both payoffs", func(c *Config) {
+			c.Options = OptionsConfig{Enabled: true, Pricer: "saga",
+				Underlyings: []OptionUnderlying{{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", StaticIndex: 50000, Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}}},
+				Exotics:     []ExoticConfig{{Coin: "BTC", Underlying: "BTCUSDT", Expiry: "2026-12-31", Strike: 60000, Payoff: "x", PayoffFile: "y.aria"}}}
+		}, "both payoff and payoff_file"},
+		{"options exotic unknown underlying", func(c *Config) {
+			c.Options = OptionsConfig{Enabled: true, Pricer: "saga",
+				Underlyings: []OptionUnderlying{{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", StaticIndex: 50000, Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}}},
+				Exotics:     []ExoticConfig{{Coin: "BTC", Underlying: "ETHUSDT", Expiry: "2026-12-31", Strike: 60000, Payoff: "x"}}}
+		}, "not in options.underlyings"},
+		{"options exotic side token", func(c *Config) {
+			c.Options = OptionsConfig{Enabled: true, Pricer: "saga",
+				Underlyings: []OptionUnderlying{{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", StaticIndex: 50000, Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}}},
+				Exotics:     []ExoticConfig{{Coin: "BTC", Underlying: "BTCUSDT", Expiry: "2026-12-31", Strike: 60000, Payoff: "x", VenueSymbol: "BTC-261231-60000-C"}}}
+		}, "parses as a vanilla side"},
+		{"options exotic bad expiry", func(c *Config) {
+			c.Options = OptionsConfig{Enabled: true, Pricer: "saga",
+				Underlyings: []OptionUnderlying{{Underlying: "BTCUSDT", Coin: "BTC", Quote: "USDT", StaticIndex: 50000, Expiries: []string{"2026-12-31"}, Strikes: []float64{50000}}},
+				Exotics:     []ExoticConfig{{Coin: "BTC", Underlying: "BTCUSDT", Expiry: "31/12/2026", Strike: 60000, Payoff: "x"}}}
+		}, "not an ISO date"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

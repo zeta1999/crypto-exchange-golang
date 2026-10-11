@@ -24,9 +24,21 @@ conformance: PASS.** Recent edge polish: Binance `@depth` incremental diff strea
 fields + **true level2 incremental diffs**, Solana USDC SPL send, and USDC/native deposit-watch
 across Solana/EVM/BTC (auto-credit). Deferred: live broadcast of EVM/SOL/BTC sends (faucet-gated).
 **Options:** CR-8 FIX 4.4 acceptor (order entry + market-data liquidity search), CR-9 EAPI crypto-options
-market-data surface (European cash-settled, BS-priced, IV + greeks + synthetic book, recorded
+market-data surface (European cash-settled, priced with the internal Black–Scholes model, IV + greeks +
+synthetic book, recorded
 fixtures), and one option market published on **all four** crypto options venues at once —
-Binance EAPI + Deribit/OKX/Bybit-compatible public shapes (`optmarket` + per-venue edges).
+Binance EAPI + Deribit/OKX/Bybit-compatible public shapes (`optmarket` + per-venue edges). **Dealer-
+quoting mode:** same book holds a `Pricer` — flow exotics (`options.exotics[]`) are listed beside the
+vanilla chain and each is priced once against its **actual configured payoff** (saga plugin, `.aria`
+script/file; never decomposed into vanilla legs) at the underlying index: executable bid/offer bracket
+the single fair value by `exotic_spread_bps`, `GET /eapi/v1/mark/exotic` returns fair + bracket + pricer/
+model provenance with IV/greeks left 0 (no invented IV); vanilla `/eapi/v1/mark` stays vanilla-only.
+One engine call per exotic per `exotic_ttl`; risk limit (`exotic_max_fair_value`) and negative
+caching keep a broken/outrageous payoff from minting calls or quotes; a missing saga binary is a boot
+warning, not a failure (vanilla chain still serves). Unit (mock Pricer: single-call, bracketed fair,
+cache, overrides, risk limit, negative cache) + **live E2E green** (skip-gated, offline: exotic mark
+matches an independent saga reference at MC tolerance, below the plain vanilla call, uncrossed,
+provenance present).
 **Flow-exotics pricing is a plugin:** `internal/pricer` seam (`Pricer`/`Registry`) with the
 `"saga"` backend driving the Sibelius/Aria `SibeliusSaga` engine over its JSON CLI
 (`../price-master-examples`; portable-RNG reproducible; barrier/Asian/autocall payoffs via

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -212,6 +213,9 @@ func main() {
 			log.Fatalf("options market: %v", err)
 		}
 		log.Printf("options book: %d instruments", len(optBook.Instruments()))
+		if err := attachOptionsExotics(optCfg, optBook); err != nil {
+			log.Fatalf("options exotics: %v", err)
+		}
 	}
 
 	// Optional Binance-spot-compatible REST edge (Phase 8, a documented
@@ -590,4 +594,108 @@ func buildOptionsMarket(cfg config.OptionsConfig, eng *engine.Engine) (*optmarke
 		}
 	}
 	return m, nil
+}
+
+// attachOptionsExotics wires the options book's dealer-quoting mode (flow
+// exotics) from config. Returns (nil, nil) when no exotics are configured —
+// a pure vanilla book needs no pricer plugin at all. When configured:
+//
+//  1. Register only the named backend on a private registry (saga for now).
+//  2. For each configured exotic, build the .aria-payoff spec and AddExotic.
+//  3. AttachPricer with the shared model, cache TTL, risk limit, half-spread.
+//
+// A missing/invalid exotics config is a hard error (fail fast); a missing
+// saga binary is NOT — the book still serves its vanilla book and the exotic
+// marks become pricer errors, which the surface skips. This keeps a
+// CI/dev box without the out-of-tree engine from being unable to boot.
+func attachOptionsExotics(cfg config.OptionsConfig, m *optmarket.Market) error {
+	if m == nil || len(cfg.Exotics) == 0 {
+		return nil
+	}
+	quoteFor := make(map[string]string, len(cfg.Underlyings))
+	for _, u := range cfg.Underlyings {
+		if q := strings.TrimSpace(u.Quote); q != "" {
+			quoteFor[u.Underlying] = q
+		}
+	}
+	reg := pricer.NewRegistry()
+	switch strings.ToLower(cfg.Pricer) {
+	case "", "saga":
+		reg.Register(&saga.Saga{})
+	default:
+		return fmt.Errorf("options exotics: unknown pricer %q (only saga is implemented)", cfg.Pricer)
+	}
+	name := cfg.Pricer
+	if name == "" {
+		name = "saga"
+	}
+	if _, ok := reg.Get(name); !ok {
+		return fmt.Errorf("options exotics: pricer %q not registered after wiring (have %v)", name, reg.Names())
+	}
+	for _, e := range cfg.Exotics {
+		kind := options.Call
+		if strings.EqualFold(e.Kind, "P") {
+			kind = options.Put
+		}
+		date, err := time.Parse("2006-01-02", e.Expiry)
+		if err != nil {
+			return fmt.Errorf("options exotic %s: bad expiry %q: %w", e.VenueSymbol, e.Expiry, err)
+		}
+		quote := "USDT"
+		if q, ok := quoteFor[e.Underlying]; ok {
+			quote = q
+		}
+		ex := optmarket.NewExoticInstrument(e.Coin, e.Underlying, quote, e.Strike, kind, date, e.VenueSymbol)
+		ex.Payoff = e.Payoff
+		ex.PayoffFile = e.PayoffFile
+		ex.Vol = e.Vol
+		ex.Model = e.Model
+		if err := m.AddExotic(ex); err != nil {
+			return fmt.Errorf("options exotic: %w", err)
+		}
+	}
+	ttl := 5 * time.Second
+	if cfg.ExoticTTL != "" {
+		if d, err := time.ParseDuration(cfg.ExoticTTL); err == nil && d > 0 {
+			ttl = d
+		} else {
+			return fmt.Errorf("options exotics: bad exotic_ttl %q: %v", cfg.ExoticTTL, err)
+		}
+	}
+	numPaths := cfg.ExoticNumPaths
+	if numPaths <= 0 {
+		numPaths = 65536
+	}
+	numSteps := cfg.ExoticNumSteps
+	if numSteps <= 0 {
+		numSteps = 252
+	}
+	shared := pricer.Params{
+		Vol:         cfg.ExoticVol,
+		Rate:        cfg.ExoticRate,
+		NumPaths:    numPaths,
+		NumSteps:    numSteps,
+		Seed:        cfg.ExoticSeed,
+		Model:       cfg.ExoticModel,
+		ExpiryYears: cfg.ExoticExpiry,
+		RNG:         "portable",
+	}
+	half := 0.0
+	if cfg.ExoticSpreadBps > 0 {
+		half = cfg.ExoticSpreadBps / 10000.0
+	}
+	if err := m.AttachPricer(reg, name, shared, ttl, cfg.ExoticMaxFair, half); err != nil {
+		return err
+	}
+	// Fail soft on a missing engine binary: log, but keep the vanilla book.
+	if sagInst, ok := reg.Get("saga"); ok {
+		if sag, ok := sagInst.(*saga.Saga); ok {
+			if _, _, err := sag.Probe(); err != nil {
+				log.Printf("options exotics: WARNING: saga binary not available (%v); exotic marks will report no-price until it is", err)
+			}
+		}
+	}
+	log.Printf("options exotics: pricer=%s count=%d ttl=%s spread=%.1f maxFair=%g",
+		name, len(cfg.Exotics), ttl, cfg.ExoticSpreadBps, cfg.ExoticMaxFair)
+	return nil
 }

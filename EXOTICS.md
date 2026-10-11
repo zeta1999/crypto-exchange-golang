@@ -11,6 +11,8 @@ is one adapter + one `Register` call.
 internal/pricer/pricer.go    Pricer interface + Params/Result + Registry (the seam)
 internal/pricer/saga/        "saga" backend — drives the Sibelius/Aria SibeliusSaga
                              demo binary over its JSON CLI (../price-master-examples)
+internal/optmarket/          options book: BS vanilla chain + flow-exotic
+                             dealer-quoting mode (Market.AttachPricer)
 cmd/examples-pricer/         three-instrument tour (vanilla MC, barrier, arith-asian)
 ```
 
@@ -86,7 +88,7 @@ All three mirror recorded inputs and goldens from the examples checkout
 (`01-vanilla/european-call`, `02-exotics/barrier-down-and-out`,
 `02-exotics/asian-arithmetic-bs`).
 
-## Where it plugs in next (order of work)
+## Where it plugs in (order of work)
 
 1. **FIX quote responder — DONE (CR-10).** The FIX 4.4 acceptor (`internal/api/fix`)
    now speaks the OTC quote flow end-to-end, wired to this plugin:
@@ -116,17 +118,45 @@ All three mirror recorded inputs and goldens from the examples checkout
      instrument.
    - Verified: unit (mock quoter: z→S, quoted-D→NEW at quoted price resting on the
      book, double-execute → Rejected, plain-D-on-exotic → S, quoter-failure →
-     reject, no-quoter → BusinessReject) + **live smoke** (`TestManualSmoke`,
-     skip-gated): a real server with the saga plugin answered a QuoteRequest,
-     executed the confirmed order into the emulator-seeded book, and rejected the
-     reused quote — all with real saga prices.
+     reject, no-quoter → BusinessReject) + **live smoke** (skip-gated): a real
+     server with the saga plugin answered a QuoteRequest, executed the confirmed
+     order into the emulator-seeded book, and rejected the reused quote — all
+     with real saga prices.
 
-2. **Option order entry + exercise/settle for the EAPI option instruments**
+2. **Options dealer-quoting mode — DONE.** The options book (`internal/
+   optmarket`) now holds a `Pricer` (via `Market.AttachPricer`) and lists flow
+   exotics next to the vanilla Black–Scholes chain, published on the same
+   Binance-EAPI surface the vanilla chain already uses:
+   - **Vanillas stay Black–Scholes**, untouched. An exotic is a different
+     instrument: it carries a bespoke payoff (`.aria` script or file) that has
+     no closed form and is **not** decomposable into vanilla legs, so it is
+     priced **once, directly** by the registered backend at the underlying
+     index — exactly the "price the ACTUAL payoff" discipline the FIX edge uses.
+   - **Executable quote:** the single MC fair value is bracketed by the
+     configured half-spread (`exotic_spread_bps`, else the market's
+     `book_half_spread`) → `bid = fair·(1−w)`, `ask = fair·(1+w)`. Uncrossed by
+     construction; a non-finite / non-positive / over-limit fair value is an
+     error (negatively cached), never a free instrument.
+   - **Provenance, not greeks:** an exotic mark carries `Pricer` + `Model`
+     (how the number was produced) and **zero** IV/greeks — an exotic is not a
+     Black–Scholes instrument, so no implied vol or greek is invented. The
+     EAPI endpoint `GET /eapi/v1/mark/exotic` surfaces that; the vanilla
+     `/eapi/v1/mark` stays vanilla-only and rejects an exotic symbol.
+   - **Subprocess safety:** a saga call is a subprocess, so each exotic is
+     priced at most once per `exotic_ttl` (default 5s) regardless of how often
+     marks are read; the vanilla chain is served from the closed form regardless
+     of any exotic latency. Config: top-level `options.exotics[]` +
+     `options.pricer/exotic_*` knobs (see configs/dev.yaml).
+   - A missing saga binary is a **boot warning, not a failure** — the vanilla
+     chain keeps serving and exotic marks report no-price until the binary is
+     present. Verified with a **live E2E** (skip-gated, offline except the saga
+     binary): the real server's exotic mark matched an independently recomputed
+     saga price for the same payoff/spot/knobs to MC tolerance, sat below the
+     plain vanilla call, was uncrossed, and carried pricer provenance.
+
+3. **Option order entry + exercise/settle for the EAPI option instruments**
    (per the options architecture notes: `Instrument` → `ContractSpec` with
    style/settlement/multiplier/payoff, then place/cancel at EAPI + venues, then an
    expiry sweep settling cash at intrinsic off the index rule).
-3. **Dealer-quoting mode of `optmarket`**: the emulator holds a `Pricer` and quotes
-   exotic books off the reference book + vol surface under risk limits — same
-   `Quoter` seam the FIX edge now uses.
 4. **CI golden** for saga-priced scenarios, once an uncapped, bit-identical engine
    dev build is available (tests compare at 1e-3 rel like the examples harness).

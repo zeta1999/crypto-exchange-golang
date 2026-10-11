@@ -99,6 +99,39 @@ options:
         - "2026-12-31"
         - "2027-03-27"
       strikes: [2500, 3000, 3500, 4000]
+  # FLOW EXOTICS (dealer-quoting mode). Uncomment to list exotics next to the
+  # vanilla chains: the book holds the saga pricer (../price-master-examples)
+  # and quotes each exotic against its ACTUAL payoff (inline `payoff` or
+  # `payoff_file` below that repo) — never via vanilla legs. Served on
+  #   GET /eapi/v1/mark/exotic[?symbol=...]     fair value + bid/ask + provenance
+  #   GET /eapi/v1/exchangeInfo                 lists the exotic contracts
+  # Determinism note: exotic marks require the saga binary and are cached for
+  # `exotic_ttl`; the vanilla chain above stays pure Black–Scholes and is the
+  # part pinned by the recorded fixture goldens. A missing binary is a boot
+  # warning (vanilla chain still serves), not a failure.
+  # pricer: "saga"
+  # exotic_vol: 0.30
+  # exotic_rate: 0.05
+  # exotic_num_paths: 65536
+  # exotic_num_steps: 252
+  # exotic_seed: 42
+  # exotic_expiry_years: 1.0
+  # exotic_spread_bps: 10     # bid/offer half-spread, bps of fair value (0 => book_half_spread)
+  # exotic_ttl: "5s"          # one engine call per exotic per interval
+  # exotic_max_fair_value: 0  # risk limit: a fair value above this is not quoted (0 = none)
+  # exotics:
+  #   - coin: "BTC"
+  #     underlying: "BTCUSDT"
+  #     expiry: "2026-12-31"
+  #     strike: 50000
+  #     kind: "C"
+  #     venue_symbol: "BTC-261231-50000-BAR"   # last token must NOT be C/P
+  #     payoff_file: "payoffs/barrier_down_out_call.aria"
+  #     # or an inline Aria payoff (exactly one of payoff / payoff_file):
+  #     # payoff: |
+  #     #   contract DownAndOutCall { let S = spot("X") var alive = 1.0
+  #     #     alive := alive * cond(S > 30000, 1.0, 0.0)
+  #     #     one(KRW) |> scale(alive * max(S - 50000, 0.0)) |> when(2026-12-31) }
 metrics:
   enabled: false
 emulator:

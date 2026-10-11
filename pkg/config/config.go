@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -174,6 +176,47 @@ type OptionsConfig struct {
 	PriceBand      float64            `yaml:"price_band"`       // high/low price-limit band, frac of mark
 	Underlyings    []OptionUnderlying `yaml:"underlyings"`
 	Venues         []VenueConfig      `yaml:"venues"`
+
+	// Flow exotics (dealer-quoting mode). Exotics is the per-contract list;
+	// Pricer/Exotic* are the shared model for all of them. When Exotics is
+	// non-empty the options book holds a Pricer and quotes the exotics'
+	// actual payoffs alongside the BS vanilla chain.
+	Exotics         []ExoticConfig `yaml:"exotics"`
+	Pricer          string         `yaml:"pricer"`              // registered pricer backend name, e.g. "saga"
+	ExoticVol       float64        `yaml:"exotic_vol"`          // shared pricing vol (annualized); 0 -> per-exotic, else surface vol
+	ExoticRate      float64        `yaml:"exotic_rate"`         // shared pricing rate (annualized); 0 = default
+	ExoticExpiry    float64        `yaml:"exotic_expiry_years"` // shared T, years; 0 -> per-exotic, else 1.0
+	ExoticSpreadBps float64        `yaml:"exotic_spread_bps"`   // exotic bid/offer half-spread, bps of fair value; 0 -> book_half_spread
+	ExoticNumPaths  int            `yaml:"exotic_num_paths"`    // MC paths; 0 -> 65536
+	ExoticNumSteps  int            `yaml:"exotic_num_steps"`    // MC steps; 0 -> 252
+	ExoticSeed      int64          `yaml:"exotic_seed"`
+	ExoticModel     string         `yaml:"exotic_model"`          // "bs" default | "dupire" | … (per-exotic override)
+	ExoticMaxFair   float64        `yaml:"exotic_max_fair_value"` // risk limit; a fair value above this is not quoted (0 = none)
+	ExoticTTL       string         `yaml:"exotic_ttl"`            // per-exotic pricing cache; duration string, default 5s
+}
+
+// ExoticConfig is one FLOW exotic listed on the options surface. It is priced
+// by the registered Pricer backend against its ACTUAL payoff (inline Aria
+// script or .aria file) — never decomposed into vanilla legs. Spot is the
+// underlying's index (live engine-book mid / static index), exactly like the
+// vanilla chain; the exotic's bid/offer bracket the single fair value by the
+// configured half-spread (ExoticSpreadBps, else the market's BookHalfSpread).
+type ExoticConfig struct {
+	// VenueSymbol: operator-chosen symbol, unique in the book. Last token must
+	// not be a bare C/P (the vanilla side token). Default: COIN-YYMMDD-STRIKE-EXOT.
+	VenueSymbol string `yaml:"venue_symbol"`
+	Coin        string `yaml:"coin"`
+	// Underlying: the options underlying whose index is the pricing spot.
+	// Must appear in OptionsConfig.Underlyings (validated).
+	Underlying  string  `yaml:"underlying"`
+	Expiry      string  `yaml:"expiry"`                // ISO date; the settlement instant is 08:00 UTC on the date
+	Strike      float64 `yaml:"strike"`                // informational + vol-surface lookup
+	Payoff      string  `yaml:"payoff,omitempty"`      // inline Aria script
+	PayoffFile  string  `yaml:"payoff_file,omitempty"` // .aria path relative to the saga checkout root
+	Kind        string  `yaml:"kind"`                  // "C" (default) or "P" — listing side only
+	Vol         float64 `yaml:"vol"`                   // 0 = inherit OptionsConfig.ExoticVol, else the surface vol at the strike
+	Model       string  `yaml:"model"`                 // "" = inherit OptionsConfig.ExoticModel (default bs)
+	ExpiryYears float64 `yaml:"expiry_years"`          // optional T override for this contract; 0 = use Expiry (the settlement date)
 }
 
 // VenueConfig names one public options venue. Binance is served on the
@@ -594,6 +637,81 @@ func (c *Config) validateOptions(o OptionsConfig, prefix string, engine map[stri
 			add("%s.venues: unknown venue %q", prefix, v.Name)
 		}
 	}
+
+	underlyingNames := make(map[string]bool, len(o.Underlyings))
+	for _, u := range o.Underlyings {
+		underlyingNames[u.Underlying] = true
+	}
+	c.validateOptionsExotics(o, underlyingNames, prefix, add)
+}
+
+// validateOptionsExotics validates the flow-exotics config on the options book.
+// A non-empty Exotics list needs a Pricer name; each exotic needs exactly one
+// payoff (Payoff XOR PayoffFile), a known underlying, and a parseable expiry.
+func (c *Config) validateOptionsExotics(o OptionsConfig, underlyings map[string]bool, prefix string, add func(string, ...interface{})) {
+	if len(o.Exotics) == 0 {
+		return
+	}
+	if strings.TrimSpace(o.Pricer) == "" {
+		add("%s.pricer is required when %s.exotics lists any exotic", prefix, prefix)
+	}
+	seen := make(map[string]bool, len(o.Exotics))
+	for i, e := range o.Exotics {
+		who := fmt.Sprintf("%s.exotics[%d]", prefix, i)
+		if strings.TrimSpace(e.Coin) == "" {
+			add("%s.coin is required", who)
+		}
+		if strings.TrimSpace(e.Underlying) == "" {
+			add("%s.underlying is required", who)
+		} else if !underlyings[e.Underlying] {
+			add("%s.underlying %q is not in %s.underlyings", who, e.Underlying, prefix)
+		}
+		if e.Strike <= 0 {
+			add("%s.strike must be > 0 (got %g)", who, e.Strike)
+		}
+		if strings.TrimSpace(e.Expiry) == "" {
+			add("%s.expiry is required (ISO date, e.g. 2026-12-31)", who)
+		} else if _, err := time.Parse("2006-01-02", e.Expiry); err != nil {
+			add("%s.expiry %q is not an ISO date: %v", who, e.Expiry, err)
+		}
+		if e.Payoff == "" && e.PayoffFile == "" {
+			add("%s requires exactly one of payoff / payoff_file", who)
+		}
+		if e.Payoff != "" && e.PayoffFile != "" {
+			add("%s sets both payoff and payoff_file (pick one)", who)
+		}
+		switch e.Kind {
+		case "", "C", "c":
+		case "P", "p":
+		default:
+			add("%s.kind must be C or P (got %q)", who, e.Kind)
+		}
+		sym := strings.TrimSpace(e.VenueSymbol)
+		if sym == "" {
+			sym = defaultExoticVenueSymbol(e, add, who)
+		}
+		if last := sym[strings.LastIndex(sym, "-")+1:]; last == "C" || last == "P" {
+			add("%s.venue_symbol %q ends in %q, which parses as a vanilla side", who, sym, last)
+		}
+		if seen[sym] {
+			add("%s.venue_symbol %q is duplicated in the options book", who, sym)
+		}
+		seen[sym] = true
+	}
+}
+
+// defaultExoticVenueSymbol builds the default COIN-YYMMDD-STRIKE-EXOT symbol.
+// It records the missing-symbol error but returns a sentinel; the symbol is not
+// used for de-dup when it could not be built.
+func defaultExoticVenueSymbol(e ExoticConfig, add func(string, ...interface{}), who string) string {
+	d, err := time.Parse("2006-01-02", e.Expiry)
+	if err != nil {
+		add("%s cannot build a default venue_symbol (expiry not parseable): %v", who, err)
+		return "EXOT"
+	}
+	side := "EXOT"
+	return fmt.Sprintf("%s-%s-%s-%s", e.Coin, d.Format("060102"),
+		strconv.FormatFloat(e.Strike, 'f', -1, 64), side)
 }
 
 func (c *Config) validateMetrics(add func(string, ...interface{})) {

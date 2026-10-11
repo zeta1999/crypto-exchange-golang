@@ -178,6 +178,7 @@ func New(engine Engine, symbols *SymbolMap, auth *Authenticator, registry *Regis
 		s.mux.HandleFunc("/eapi/v1/time", s.handleTime)
 		s.mux.HandleFunc("/eapi/v1/exchangeInfo", s.handleOptionExchangeInfo)
 		s.mux.HandleFunc("/eapi/v1/mark", s.handleOptionMark)
+		s.mux.HandleFunc("/eapi/v1/mark/exotic", s.handleOptionExoticMark)
 		s.mux.HandleFunc("/eapi/v1/depth", s.handleOptionDepth)
 		s.mux.HandleFunc("/eapi/v1/index", s.handleOptionIndex)
 	}
