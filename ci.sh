@@ -73,12 +73,15 @@ step "float64 decimal backend A/B (build + vet + test -tags decimal_float64)"
 # under the tag except two bit-exact golden tests that legitimately assert
 # exact decimal strings (the float back-end is deliberately loose):
 #   TestScenarioGoldenFile (emulator), TestHubWithdrawQuantizes (transfer).
+# The -skip regex IS anchored: unanchored, 'TestHubWithdrawQuantizes' would
+# also match TestHubWithdrawDebitsAndSends (substring) and silently skip a
+# passing test — masking any future drift there.
 # Any NEW failure there means the back-end introduced a type-level or
 # semantic regression and blocks the gate.
 go build -tags decimal_float64 ./... || fail "float64 build"
 go vet -tags decimal_float64 ./... || fail "float64 vet"
 go test -tags decimal_float64 -short -race -count=1 -timeout=300s \
-  -skip 'TestHubWithdrawQuantizes|TestScenarioGoldenFile' \
+  -skip '^(TestHubWithdrawQuantizes|TestScenarioGoldenFile)$' \
   ./... || fail "float64 test"
 ok "float64 back-end A/B clean"
 
