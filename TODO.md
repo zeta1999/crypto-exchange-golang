@@ -169,6 +169,10 @@ fix → CI → manual TESTING subagent → iterate until clean.
 - [x] scenario golden-file test in CI (deterministic replay→reference→seeder→user→tape pinned to a committed golden; `UPDATE_GOLDEN=1` regenerates)
 - [x] gRPC + native-WS request metrics (`exchange_{grpc,ws}_requests/commands_total` by method/command+status) + latency **histograms** (dependency-free `metrics.Histogram`)
 - [x] README refresh with run instructions (branded README + capabilities)
+- [x] A/B decimal benchmarks: `make bench-decimals` (scripts/bench-decimals.sh) → docs/BENCHMARKS.md (machine-managed) — exact Mul ~5.3ns vs float ~0.19ns, both 0 allocs
+- [x] barrier PDE golden expansion: 2nd deterministic PDE scenario (down-and-in PUT σ=0.25 B=70) @1e-8 + vanilla-put cross-verify; vanilla PUT MC golden (1e-3 + BS 1e-2 anchor); PDE interleaved in concurrent saga suite (still returns exact golden)
+- [x] golangci-lint v2 installed & enforced (`.golangci.yml`: standard set, errcheck full in prod / best-effort `_test.go`); first pass fixed 13 prod errcheck sites (WAL close-at-shutdown now logs loss; rest per-site `//nolint` w/ reasons) + 4 staticcheck (1 QF1008 marked false positive); `ci.sh` resolves bin PATH or `$HOME/go/bin`, fails on violations
+- [x] gate determinism: both test stages `-short` (the 3 `testing.Short()` tests are the only live ones — outbound feed + saga subprocess; 5.5s isolated vs >90s under `-race` parallel load); `TestWSMarketTradeRaw` read deadline 2s→8s (CPU starvation under load, not a code bug)
 - [x] account balance ledger → live /account + /accounts (lock/settle on trade)
 
 ## Exotics — pricing as a plugin

@@ -107,7 +107,7 @@ func Replay(path string, fn func(Entry) error) error {
 	if err != nil {
 		return fmt.Errorf("open wal for replay: %w", err)
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck // read path; scanner/entry errors are the checked path
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		var entry Entry

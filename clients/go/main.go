@@ -17,7 +17,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("dial grpc: %v", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // CLI teardown; the stream error (checked) is the signal, not conn close
 
 	client := exchangev1.NewExchangeServiceClient(conn)
 	stream, err := client.StreamOrders(ctx)

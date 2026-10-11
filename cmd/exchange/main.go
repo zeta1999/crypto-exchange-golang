@@ -70,7 +70,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("init wal: %v", err)
 	}
-	defer walWriter.Close()
+	defer func() {
+		if err := walWriter.Close(); err != nil {
+			log.Printf("close wal: %v (entries written before the failure are retained)", err)
+		}
+	}()
 
 	book := orderbook.New(instruments)
 	events := make(chan grpcserver.Event, 1024)

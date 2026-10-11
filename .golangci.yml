@@ -1,0 +1,24 @@
+# golangci-lint v2 config. Binary >= v2.x required (installed via go install;
+# see STATUS.md for the exact command).
+#
+# Policy:
+#   - standard linter set (errcheck, govet, staticcheck, unused, gosimple,
+#     ineffassign, and the v2 "standard" defaults).
+#   - errcheck is relaxed to best-effort for _test.go ONLY: the idiomatic
+#     Go test pattern is an unchecked deferred teardown close (resp.Body.Close,
+#     srv.Process.Kill, conn.Close on a dial you don't need to confirm).
+#     Production code keeps full errcheck enforcement and the handful of
+#     intentional best-effort teardown closes are marked explicitly with
+#     //nolint:errcheck + a one-line reason at the site (audited, not blanket).
+version: "2"
+
+run:
+  timeout: 10m
+
+linters:
+  default: standard
+  exclusions:
+    generated: lax
+    rules:
+      - linters: [errcheck]
+        path: _test\.go$

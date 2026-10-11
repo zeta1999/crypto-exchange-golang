@@ -106,7 +106,7 @@ func (s *Stellar) Received(ctx context.Context, address, cursor string) ([]Payme
 		}
 		asset := "XLM"
 		if p.Asset.Type != "native" {
-			asset = p.Asset.Code
+			asset = p.Asset.Code //nolint:staticcheck // QF1008 false positive: Asset is the BasicAsset interface, Code is a method, not an embedded field
 		}
 		out = append(out, Payment{
 			TxRef:  p.TransactionHash,

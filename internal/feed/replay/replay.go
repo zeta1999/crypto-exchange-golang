@@ -100,7 +100,7 @@ func (s *Source) Start(ctx context.Context) (<-chan feed.Event, error) {
 	go func() {
 		defer close(out)
 		if closer != nil {
-			defer closer.Close()
+			defer closer.Close() //nolint:errcheck // stream teardown; read-end errors are the checked path
 		}
 		s.SetState("connected")
 

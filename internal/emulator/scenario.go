@@ -204,7 +204,7 @@ func LoadScenario(path string, seed int64) (*Scenario, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open scenario: %w", err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // read-then-parse pattern; ParseScenario is the checked path
 	return ParseScenario(f, seed)
 }
 

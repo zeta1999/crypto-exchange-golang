@@ -1,6 +1,6 @@
 # Local developer targets. CI is ./ci.sh (NOT GitHub Actions).
 
-.PHONY: ci fmt lint vet build test run feedcat tidy
+.PHONY: ci fmt lint vet build test run feedcat tidy bench-decimals
 
 ci:        ## Run the full local CI gate
 	./ci.sh
@@ -28,3 +28,6 @@ feedcat:   ## Run the feed inspector (lands in Phase 1)
 
 tidy:      ## Tidy modules
 	go mod tidy
+
+bench-decimals: ## A/B benchmark pkg/decimal exact vs float64 backend (BENCHTIME=...x to override)
+	./scripts/bench-decimals.sh ${BENCHTIME:-10000000x}

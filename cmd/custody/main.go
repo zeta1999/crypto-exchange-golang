@@ -98,7 +98,7 @@ func openKeystore() (*custody.Keystore, error) {
 
 func cmdWallet(reg *custody.Registry, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: custody wallet <new|list|address> ...")
+		return errors.New("usage: custody wallet new|list|address <args>")
 	}
 	switch args[0] {
 	case "new":

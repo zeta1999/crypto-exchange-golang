@@ -1,6 +1,6 @@
 # STATUS
 
-_Last updated: 2026-10-11 (float64 decimal backend (A/B) + barrier PDE CI golden @1e-8; live EVM/SOL/BTC send broadcast DEFERRED)_
+_Last updated: 2026-10-11 (hardening round: A/B benchmark report, barrier-PDE golden expansion, PDE in concurrent saga suite, golangci-lint v2 installed + enforced + gate fixes)_
 
 ## Current phase
 **Runnable product + exact decimals** ✅ — `go run ./cmd/exchange` boots a live Coinbase-mirroring
@@ -159,3 +159,34 @@ Set `emulator.enabled: false` for a plain offline matching engine.
   tests (bit-identity vs raw float64 ops) + A/B benchmarks; ci.sh A/B stage.
 3. Saga plugin: vanilla-script inference only when no endpoint selected → PDE
   pass-through routes clean.
+
+## Done 2026-10-11 (afternoon) — hardening round
+4. **A/B benchmark report** — `make bench-decimals` (`scripts/bench-decimals.sh`) runs the
+   exact-core vs float64-backend benchmarks in one pass and maintains the numbers in
+   `docs/BENCHMARKS.md` (machine-managed block): exact Mul ~5.3 ns/op, float Mul ~0.19 ns/op,
+   both 0 allocs.
+5. **Barrier PDE golden expansion** — second deterministic PDE scenario
+   (`TestSaga_BarrierPDEGolden_DownAndInPut`: down-and-in PUT, σ=0.25, B=70) at the same
+   1e-8 gate, cross-verified against the engine's own vanilla put (pathwise dominance:
+   barrier ≤ vanilla, strict ATM). Vanilla PUT MC golden added too
+   (`TestSaga_VanillaPutMC`: 1e-3 gate + Black-Scholes 1e-2 anchor) — put-side MC coverage
+   previously missing.
+6. **PDE in the concurrent saga suite** — `TestSaga_ConcurrentCalls` now interleaves one
+   deterministic PDE call with the MC workers and requires it to still return the exact
+   golden (no shared-state corruption under concurrency).
+7. **golangci-lint installed & enforced** — v2.14 via `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`
+   (a v1 binary is rejected by config version "2"). New `.golangci.yml`: standard linter set;
+   errcheck full for production, best-effort in `_test.go` teardown. First full run fixed
+   13 production errcheck sites (the WAL close at shutdown now logs loss; the rest are
+   audited per-site `//nolint:errcheck` with a reason) + 4 staticcheck findings (tagged
+   switch, unconditional TrimSuffix, error-string punctuation; one QF1008 marked a false
+   positive — `Asset.Code` is the BasicAsset *method*, there is no embedded field).
+   `ci.sh` resolves the lint binary from PATH or `$HOME/go/bin` and fails the gate on
+   violations. `go build ./...` + `go vet ./...` green throughout.
+   Gate determinism: both test stages now run with `-short` — the three
+   `testing.Short()`-gated tests are the only live ones (outbound Coinbase feed +
+   saga subprocess; 5.5s isolated vs >90s once under full `-race` parallel load,
+   so they flaked the gate). On-demand live runs are unchanged
+   (`go test ./internal/api/fix -run TestLive -v`). `TestWSMarketTradeRaw`
+   read-deadline also raised 2s→8s (in-process test, but its 2s window starves
+   for CPU under parallel `-race` load — observed intermittent CI timeout).

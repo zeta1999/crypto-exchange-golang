@@ -356,11 +356,11 @@ func (ks *Keystore) persist() error {
 		return fmt.Errorf("custody: write keystore: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		f.Close() //nolint:errcheck // error path; the write error is the one worth surfacing
 		return fmt.Errorf("custody: write keystore: %w", err)
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		f.Close() //nolint:errcheck // error path; the sync error is the one worth surfacing
 		return fmt.Errorf("custody: sync keystore: %w", err)
 	}
 	if err := f.Close(); err != nil {

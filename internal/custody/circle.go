@@ -56,7 +56,7 @@ func circleDrip(ctx context.Context, hc *http.Client, blockchain, address string
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // cleanup; the read errors below are the checked path
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("circle faucet http %d: %s", resp.StatusCode, truncate(respBody, 300))

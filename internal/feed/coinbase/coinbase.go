@@ -107,7 +107,7 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 	if err != nil {
 		return fmt.Errorf("dial coinbase: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // teardown; dial/read errors are the checked path
 
 	// A blocking ReadMessage doesn't observe ctx; close the conn on
 	// cancellation so the read unwinds promptly. The done channel stops the
@@ -117,7 +117,7 @@ func (s *Source) connectAndStream(ctx context.Context, out chan<- feed.Event) er
 	go func() {
 		select {
 		case <-ctx.Done():
-			conn.Close()
+			conn.Close() //nolint:errcheck // cancellation unblock; the read unwinding is the success path
 		case <-done:
 		}
 	}()

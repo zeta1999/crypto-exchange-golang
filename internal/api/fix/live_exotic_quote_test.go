@@ -361,8 +361,5 @@ func indentBlock(s string) string {
 func leanNum(v float64) string {
 	s := fmt.Sprintf("%.4f", v)
 	s = strings.TrimRight(s, "0")
-	if strings.HasSuffix(s, ".") {
-		s = strings.TrimSuffix(s, ".")
-	}
-	return s
+	return strings.TrimSuffix(s, ".")
 }

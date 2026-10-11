@@ -185,7 +185,10 @@ func (s *Saga) Price(ctx context.Context, p pricer.Params) (pricer.Result, error
 		if keepTmp {
 			return // preserved; path is in the error
 		}
-		os.RemoveAll(tmp)
+		// Best-effort cleanup: a residual temp dir on cleanup failure is
+		// harmless (unique name, removed on next boot's tmp reaper); the
+		// pricing result remains the authoritative outcome.
+		_ = os.RemoveAll(tmp)
 	}()
 	inPath := filepath.Join(tmp, "input.json")
 	outPath := filepath.Join(tmp, "out.json")
@@ -252,7 +255,7 @@ func readCapped(path string, n int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // bounded read; read-truncation logic below is the checked path
 	buf := make([]byte, n+1)
 	total, _ := f.Read(buf)
 	for total <= n {

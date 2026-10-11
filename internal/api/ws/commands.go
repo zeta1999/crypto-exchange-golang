@@ -56,7 +56,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // per-connection teardown; the read loop's error is the checked path
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
@@ -167,7 +167,7 @@ func DialExample(addr, token string, connFactory func(urlStr string) (*websocket
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // dial-hygiene helper; the write/read errors below are the checked path
 	payload := command{Command: "snapshot", Instrument: "BTC-USD", Token: token}
 	if err := conn.WriteJSON(payload); err != nil {
 		return err

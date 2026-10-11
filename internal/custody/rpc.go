@@ -48,7 +48,7 @@ func httpGet(ctx context.Context, hc *http.Client, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // cleanup; the read-error return below is the checked path
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if err != nil {
 		return nil, err
@@ -71,7 +71,7 @@ func httpPost(ctx context.Context, hc *http.Client, url, body string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // cleanup; the read-error return below is the checked path
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if err != nil {
 		return nil, err
@@ -114,7 +114,7 @@ func jsonRPC(ctx context.Context, hc *http.Client, endpoint, method string, para
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // cleanup; the read-error return below is the checked path
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if err != nil {
 		return err

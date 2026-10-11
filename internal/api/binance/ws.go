@@ -70,12 +70,12 @@ func (s *Server) parseStreamName(name string) (parsedStream, bool) {
 		return parsedStream{}, false
 	}
 	ps := parsedStream{name: name, binSym: sym, engineSym: engSym}
-	switch {
-	case suffix == "trade":
+	switch suffix {
+	case "trade":
 		ps.kind = kindTrade
-	case suffix == "depth20" || suffix == "depth20@100ms":
+	case "depth20", "depth20@100ms":
 		ps.kind = kindDepth
-	case suffix == "depth" || suffix == "depth@100ms":
+	case "depth", "depth@100ms":
 		ps.kind = kindDepthDiff
 	default:
 		return parsedStream{}, false

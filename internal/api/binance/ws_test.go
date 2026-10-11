@@ -64,10 +64,14 @@ func (h *wsHarness) dial(t *testing.T, path string) *websocket.Conn {
 	return c
 }
 
-// readJSON reads one text frame within a deadline and unmarshals it.
+// readJSON reads one text frame within a deadline and unmarshals it. The
+// deadline is deliberately generous (8s): the server's push path is a real
+// goroutine on a real timer, and under parallel -race full-suite load the
+// 2-second window occasionally starves for CPU (observed intermittent CI
+// timeouts; 10/10 in isolated runs).
 func readJSON(t *testing.T, c *websocket.Conn, v interface{}) {
 	t.Helper()
-	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = c.SetReadDeadline(time.Now().Add(8 * time.Second))
 	_, data, err := c.ReadMessage()
 	if err != nil {
 		t.Fatalf("read message: %v", err)
