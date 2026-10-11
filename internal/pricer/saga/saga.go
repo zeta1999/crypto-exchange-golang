@@ -258,7 +258,10 @@ func readCapped(path string, n int) ([]byte, error) {
 	defer f.Close() //nolint:errcheck // bounded read; read-truncation logic below is the checked path
 	buf := make([]byte, n+1)
 	total, _ := f.Read(buf)
-	for total <= n {
+	// Loop while under the cap: a file of EXACTLY n bytes must not trigger one
+	// more read against a zero-cap slice (redundant syscall; harmless on regular
+	// files, wrong in principle).
+	for total < n {
 		k, e := f.Read(buf[total:])
 		total += k
 		if e != nil {
@@ -295,17 +298,17 @@ func buildRequest(p pricer.Params) (string, map[string]any, error) {
 	if p.Script != "" && p.ScriptFile != "" {
 		return "", nil, fmt.Errorf("saga: set Script OR ScriptFile, not both")
 	}
-	if p.Script == "" && p.ScriptFile == "" && p.Model == "" {
-		// Documented vanilla shape: infer the payoff from strike/side. Only
-		// when the caller has NOT selected an endpoint explicitly (p.Model
-		// empty): explicit-model callers — including pass-through endpoints
-		// like AriaPDEPriceLV whose arguments carry the payoff as
-		// strike/isCall/barrier and which reject an inline `script` — are
-		// fully responsible for the request shape.
+	if p.Script == "" && p.ScriptFile == "" && p.Model == "" && p.Endpoint == "" {
+		// Documented vanilla shape: infer the payoff from strike/side. ONLY
+		// when the caller has selected nothing explicitly — no model, no
+		// script, no endpoint. Any explicit selection (a pass-through
+		// endpoint like AriaPDEPriceLV whose arguments carry the payoff as
+		// strike/isCall/barrier and which reject an inline `script`, or a
+		// named model) takes full responsibility for the request shape.
 		// (p is a copy of the caller's Params — buildRequest never mutates
 		// the incoming struct.)
 		if p.Strike <= 0 {
-			return "", nil, fmt.Errorf("saga: no payoff: set Script, ScriptFile, or Strike (+Side)")
+			return "", nil, fmt.Errorf("saga: no payoff: set Script, ScriptFile, or Strike (+Side); a bare Endpoint is a pass-through and carries its own payload")
 		}
 		p.Script = vanillaScript(p.Strike, p.Side == "P")
 	}
@@ -320,7 +323,7 @@ func buildRequest(p pricer.Params) (string, map[string]any, error) {
 	}
 	if p.Script != "" {
 		args["script"] = p.Script
-	} else {
+	} else if p.ScriptFile != "" {
 		args["script_file"] = p.ScriptFile
 	}
 

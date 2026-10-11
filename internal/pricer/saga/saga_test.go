@@ -85,6 +85,11 @@ func TestSaga_BarrierDownAndOut(t *testing.T) {
 // for these exact parameters (barrier-pde-localvol/README.md, agrees with the
 // PDE to ~5e-6 rel, i.e. the grid discretization) so the pinned golden is
 // proven to be the CORRECT barrier price, not merely a stable one.
+// goldenPDECDOCall pins the deterministic down-and-out-call PDE golden shared
+// by TestSaga_BarrierPDEGolden and TestSaga_ConcurrentCalls (a single source
+// of truth for the literal — duplicating it risks silent drift).
+const goldenPDECDOCall = 13.244937327991609
+
 // pdeParams builds a pass-through PDE request via the plugin's default branch
 // (endpoint forwarded verbatim; the vanilla-script fallback is suppressed
 // because Model is non-empty). Spot/Rate/ExpiryYears ride the well-known
@@ -173,7 +178,7 @@ func TestSaga_BarrierPDEGolden(t *testing.T) {
 	checkPDE(t, res, 80, false, true)
 	// CI golden: recorded deterministic PDE value (input.expected.json),
 	// float-vs-float at 1e-8 rel (observed cross-build drift ~2.6e-13).
-	const want = 13.244937327991609
+	const want = goldenPDECDOCall
 	if rel := math.Abs(res.Price-want) / want; rel > 1e-8 {
 		t.Errorf("pde barrier = %v, want %v (rel %g, gate 1e-8)", res.Price, want, rel)
 	}
@@ -335,8 +340,9 @@ func TestSaga_ConcurrentCalls(t *testing.T) {
 	}
 	// The interleaved deterministic PDE call returns the CI golden exactly
 	// (same constant as TestSaga_BarrierPDEGolden).
-	if rel := math.Abs(pdePrices[0]-13.244937327991609) / 13.244937327991609; rel > 1e-8 {
-		t.Errorf("concurrent PDE price = %v, golden 13.244937327991609 (rel %g)", pdePrices[0], rel)
+	const want = goldenPDECDOCall
+	if rel := math.Abs(pdePrices[0]-want) / want; rel > 1e-8 {
+		t.Errorf("concurrent PDE price = %v, golden %v (rel %g)", pdePrices[0], want, rel)
 	}
 }
 
